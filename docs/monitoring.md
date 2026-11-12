@@ -47,9 +47,10 @@ Create a mode-0600 JSON input outside tracked sources with `credentials_file`, `
 Use the [synthetic input example](../verification/examples/monitoring.json) as the starting point for a private copy.
 The credential file uses `Email:` and `Password:` fields from the existing installation.
 The public key file contains the existing hub key.
-Use four distinct system names for the Mac, Linux server, Windows laptop, and Pi.
+Use `Raspberry Pi` for the Pi registration and distinct names for the Mac, Linux server, and Windows laptop.
 Select only the Linux server for disconnect notifications.
-The helper accepts HTTPS tailnet origins and the existing HTTP tailnet origin during migration.
+The helper requires HTTPS tailnet origins.
+Expose an existing source hub through Tailscale Serve HTTPS before preparing its migration.
 
 ```sh
 mise x -- cargo run --locked -- prepare /private/path/client.json
@@ -67,6 +68,20 @@ Preview `monitoring-plan` before applying `monitoring-apply` on the target.
 Keep the `apps` user manager running with lingering enabled and reload its units after applying the profile.
 Credential existence conditions keep unprovisioned services stopped.
 
+After applying the profile, copy the checksum-verified ARM64 agent produced by the local initializer from the Mac.
+
+```sh
+scp .local/preflight/tools/beszel-agent USER@HOST:beszel-agent
+```
+
+In the Pi login shell, verify the pinned executable hash before installing the agent for `apps`.
+The profile creates the destination directory.
+
+```sh
+printf 'bd6eed7a98493e0900c3398177552a53809546733ea69a8ad200e2cf4c7b677c  %s\n' "$HOME/beszel-agent" | sha256sum --check --strict
+sudo install -o apps -g apps -m 0755 "$HOME/beszel-agent" /var/lib/apps/monitoring/bin/beszel-agent
+```
+
 Stop the source hub and wait for its process to exit before taking a complete backup of `beszel_data` with its private key and both SQLite databases.
 Verify the backup and preserve the source installation as the rollback checkpoint.
 Restore the complete data directory into the stopped rootless `monitoring-beszel` volume and normalize ownership for user ID 10001.
@@ -74,7 +89,12 @@ Start the target hub and ntfy before changing agent endpoints.
 Expose each loopback service through its selected Tailscale Serve HTTPS port, preserving existing routes.
 Verify TLS from another tailnet device.
 Redirect the existing agents without replacing their tokens or the hub key.
-Then start the native Pi agent.
+After installing its private environment file, start the native Pi agent in the Pi login shell.
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now monitoring-agent.service
+```
 
 ```sh
 mise x -- cargo run --locked -- configure /private/path/client.json
@@ -125,7 +145,16 @@ pbpaste | mise x -- cargo run --locked -- reader-password /private/path/client.j
 ```
 
 The helper updates the private credential file, `ntfy.env`, and `iphone.txt` while preserving the publisher identity and its configuration.
-It keeps the previous files in a private `reader-password-backup` directory until verification succeeds.
+Preparation, rotation, retirement, and verification share a process lock.
+The helper stages the previous and replacement files in a private `reader-password-backup` directory before replacing active files.
+Preparation refuses to overwrite a pending rotation.
+If rotation stops before completion, resume the staged replacement before deployment.
+
+```sh
+mise x -- cargo run --locked -- reader-password-resume /private/path/client.json
+```
+
+Resumption preserves unrelated credentials and refuses conflicting file or configuration edits.
 Install the updated `ntfy.env` for the unprivileged service account and restart the ntfy service.
 Run the verification command after the service becomes ready.
 

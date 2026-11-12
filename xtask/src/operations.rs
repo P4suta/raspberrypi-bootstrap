@@ -6,8 +6,7 @@ use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
     io::{Read, Write},
-    net::Ipv4Addr,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -60,14 +59,9 @@ struct Session {
 fn validate_url(value: &str) -> Result<Url> {
     let url = Url::parse(value)?;
     let host = url.host_str().context("endpoint needs a host")?;
-    let tailnet_address = host.parse::<Ipv4Addr>().is_ok_and(|address| {
-        let bytes = address.octets();
-        bytes[0] == 100 && (64..=127).contains(&bytes[1])
-    });
     ensure!(
-        (url.scheme() == "https" && host.ends_with(".ts.net"))
-            || (url.scheme() == "http" && tailnet_address),
-        "endpoint must belong to the private tailnet"
+        url.scheme() == "https" && host.ends_with(".ts.net"),
+        "endpoint must use HTTPS on the private tailnet"
     );
     ensure!(
         url.username().is_empty() && url.password().is_none(),
@@ -86,14 +80,16 @@ fn inputs(path: &Path) -> Result<Inputs> {
         validate_url(endpoint)?;
     }
     ensure!(
-        value.required_systems.len() == 4,
-        "four explicit target systems are required"
+        value.required_systems.len() == 4
+            && value.required_systems.iter().collect::<BTreeSet<_>>().len() == 4,
+        "four distinct target systems are required"
     );
     ensure!(
-        value
-            .offline_systems
-            .iter()
-            .all(|name| value.required_systems.contains(name)),
+        value.offline_systems.iter().collect::<BTreeSet<_>>().len() == value.offline_systems.len()
+            && value
+                .offline_systems
+                .iter()
+                .all(|name| value.required_systems.contains(name)),
         "offline targets must belong to the target set"
     );
     Ok(value)
@@ -113,18 +109,111 @@ fn private_read(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn private_write(path: &Path, contents: &[u8]) -> Result<()> {
-    if path.exists() {
-        private_read(path)?;
+    private_replace(path, |file| Ok(file.write_all(contents)?))
+}
+
+fn parent_directory(path: &Path) -> Result<&Path> {
+    let parent = path.parent().context("file needs a parent directory")?;
+    Ok(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })
+}
+
+fn private_replace(path: &Path, write: impl FnOnce(&mut fs::File) -> Result<()>) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            private_read(path)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
+    let parent = parent_directory(path)?;
+    let staged = parent.join(format!(".private-write-{}", random_text(24)?));
     let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .write(true)
         .mode(0o600)
-        .open(path)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    Ok(())
+        .open(&staged)?;
+    let result = (|| -> Result<()> {
+        write(&mut file)?;
+        file.sync_all()?;
+        fs::rename(&staged, path)?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    let cleanup = match fs::remove_file(&staged) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    };
+    finish_cleanup(result, cleanup)
+}
+
+fn finish_cleanup(result: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (result, cleanup) {
+        (Err(primary), Err(cleanup)) => {
+            Err(primary.context(format!("cleanup also failed: {cleanup:#}")))
+        }
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(()), cleanup) => cleanup,
+    }
+}
+
+enum RotationAccess {
+    Stable,
+    Pending,
+}
+
+struct CredentialLock {
+    _file: fs::File,
+    config: PathBuf,
+}
+
+fn credential_lock(config: &Path, access: RotationAccess) -> Result<CredentialLock> {
+    let root = parent_directory(config)?;
+    let path = root.join("credentials.lock");
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            private_read(&path)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)?;
+    lock.try_lock()
+        .context("another credential operation is active")?;
+    let pending = match fs::symlink_metadata(root.join("reader-password-backup")) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.permissions().mode() & 0o077 == 0,
+                "rotation backup must be a private directory"
+            );
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    match access {
+        RotationAccess::Stable => ensure!(
+            !pending,
+            "finish the pending rotation before preparing or changing credentials"
+        ),
+        RotationAccess::Pending => ensure!(pending, "no pending rotation exists"),
+    }
+    Ok(CredentialLock {
+        _file: lock,
+        config: config.to_owned(),
+    })
 }
 
 fn random_text(length: usize) -> Result<String> {
@@ -186,13 +275,11 @@ fn replace_reader_hash(environment: &str, hash: &str) -> Result<String> {
 }
 
 fn reader_backup(path: &Path) -> Result<PathBuf> {
-    Ok(path
-        .parent()
-        .context("configuration needs a parent directory")?
-        .join("reader-password-backup"))
+    Ok(parent_directory(path)?.join("reader-password-backup"))
 }
 
 fn rotate_reader_password(path: &Path, password: &str) -> Result<()> {
+    let lock = credential_lock(path, RotationAccess::Stable)?;
     let inputs = inputs(path)?;
     let hash = password_hash(password, 12)?;
     let mut secret = secrets(path)?;
@@ -200,33 +287,32 @@ fn rotate_reader_password(path: &Path, password: &str) -> Result<()> {
         password != secret.reader_password,
         "reader password has not changed"
     );
-    let runtime = path
-        .parent()
-        .context("configuration needs a parent directory")?
-        .join("runtime");
+    let runtime = parent_directory(path)?.join("runtime");
     let old_environment = private_read(&runtime.join("ntfy.env"))?;
     let environment = replace_reader_hash(std::str::from_utf8(&old_environment)?, &hash)?;
     let old_phone = private_read(&runtime.join("iphone.txt"))?;
     let old_state = private_read(&state_path(path)?)?;
-    let backup = reader_backup(path)?;
-    fs::create_dir(&backup)
-        .context("create private rotation backup; finish any pending rotation first")?;
-    fs::set_permissions(&backup, fs::Permissions::from_mode(0o700))?;
-    for (name, bytes) in [
-        ("ntfy.env", old_environment),
-        ("iphone.txt", old_phone),
-        ("secrets.json", old_state),
-    ] {
-        private_write(&backup.join(name), &bytes)?;
-    }
     secret.reader_password = password.to_owned();
     let phone = format!(
         "Server: {}\nTopic: home-status\nUsername: iphone\nPassword: {password}\n",
         inputs.ntfy_url
     );
-    private_write(&runtime.join("ntfy.env"), environment.as_bytes())?;
-    private_write(&runtime.join("iphone.txt"), phone.as_bytes())?;
-    private_write(&state_path(path)?, &serde_json::to_vec_pretty(&secret)?)?;
+    stage_reader_rotation(
+        &lock,
+        &[
+            ("client.json", &private_read(path)?),
+            ("ntfy.env", &old_environment),
+            ("iphone.txt", &old_phone),
+            ("secrets.json", &old_state),
+            ("replacement-ntfy.env", environment.as_bytes()),
+            ("replacement-iphone.txt", phone.as_bytes()),
+            (
+                "replacement-secrets.json",
+                &serde_json::to_vec_pretty(&secret)?,
+            ),
+        ],
+    )?;
+    apply_reader_rotation(&lock)?;
     println!("Updated private reader credentials; deploy ntfy.env before checking the rotation");
     Ok(())
 }
@@ -242,7 +328,76 @@ pub(super) fn reader_password(path: &Path) -> Result<()> {
     rotate_reader_password(path, &password)
 }
 
-fn verify_reader_rotation(base: Url, previous: &Secrets, active: &Secrets) -> Result<()> {
+fn stage_reader_rotation(lock: &CredentialLock, files: &[(&str, &[u8])]) -> Result<()> {
+    let root = parent_directory(&lock.config)?;
+    let staged = root.join(format!(".reader-password-stage-{}", random_text(24)?));
+    fs::DirBuilder::new().mode(0o700).create(&staged)?;
+    let result = (|| -> Result<()> {
+        for (name, bytes) in files {
+            private_write(&staged.join(name), bytes)?;
+        }
+        fs::File::open(&staged)?.sync_all()?;
+        fs::rename(&staged, reader_backup(&lock.config)?)?;
+        fs::File::open(root)?.sync_all()?;
+        Ok(())
+    })();
+    let cleanup = match fs::remove_dir_all(&staged) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    };
+    finish_cleanup(result, cleanup)
+}
+
+fn reader_replacements(lock: &CredentialLock) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let path = &lock.config;
+    let backup = reader_backup(path)?;
+    ensure!(
+        private_read(path)? == private_read(&backup.join("client.json"))?,
+        "pending rotation configuration changed"
+    );
+    let previous: Secrets = serde_json::from_slice(&private_read(&backup.join("secrets.json"))?)?;
+    let replacement: Secrets =
+        serde_json::from_slice(&private_read(&backup.join("replacement-secrets.json"))?)?;
+    validate_reader_transition(&previous, &replacement)?;
+    let root = parent_directory(path)?;
+    let mut replacements = Vec::new();
+    for name in ["ntfy.env", "iphone.txt", "secrets.json"] {
+        let destination = if name == "secrets.json" {
+            root.join(name)
+        } else {
+            root.join("runtime").join(name)
+        };
+        let previous = private_read(&backup.join(name))?;
+        let replacement = private_read(&backup.join(format!("replacement-{name}")))?;
+        let active = private_read(&destination)?;
+        ensure!(
+            active == previous || active == replacement,
+            "pending rotation conflicts with a changed credential file"
+        );
+        replacements.push((destination, replacement));
+    }
+    Ok(replacements)
+}
+
+fn apply_reader_rotation(lock: &CredentialLock) -> Result<()> {
+    for (path, replacement) in reader_replacements(lock)? {
+        private_write(&path, &replacement)?;
+    }
+    Ok(())
+}
+
+pub(super) fn reader_password_resume(path: &Path) -> Result<()> {
+    inputs(path)?;
+    let lock = credential_lock(path, RotationAccess::Pending)?;
+    apply_reader_rotation(&lock)?;
+    println!(
+        "Restored the pending replacement files; deploy ntfy.env before checking the rotation"
+    );
+    Ok(())
+}
+
+fn validate_reader_transition(previous: &Secrets, active: &Secrets) -> Result<()> {
     ensure!(
         previous.reader_password != active.reader_password,
         "reader password has not changed"
@@ -250,6 +405,11 @@ fn verify_reader_rotation(base: Url, previous: &Secrets, active: &Secrets) -> Re
     let mut expected = previous.clone();
     expected.reader_password = active.reader_password.clone();
     ensure!(expected == *active, "rotation changed another credential");
+    Ok(())
+}
+
+fn verify_reader_rotation(base: Url, previous: &Secrets, active: &Secrets) -> Result<()> {
+    validate_reader_transition(previous, active)?;
     let status = client()?
         .get(base.join("home-status/json?poll=1")?)
         .basic_auth("iphone", Some(&previous.reader_password))
@@ -265,26 +425,38 @@ fn verify_reader_rotation(base: Url, previous: &Secrets, active: &Secrets) -> Re
 }
 
 pub(super) fn reader_password_check(path: &Path) -> Result<()> {
+    let lock = credential_lock(path, RotationAccess::Pending)?;
+    for (destination, replacement) in reader_replacements(&lock)? {
+        ensure!(
+            private_read(&destination)? == replacement,
+            "resume the pending rotation before deployment verification"
+        );
+    }
     let inputs = inputs(path)?;
     let previous: Secrets =
         serde_json::from_slice(&private_read(&reader_backup(path)?.join("secrets.json"))?)?;
     let active = secrets(path)?;
     verify_reader_rotation(validate_url(&inputs.ntfy_url)?, &previous, &active)?;
     hub_notification(&Session::login(&inputs, false)?, &active)?;
-    let backup = reader_backup(path)?;
-    for name in ["ntfy.env", "iphone.txt", "secrets.json"] {
-        fs::remove_file(backup.join(name))?;
-    }
-    fs::remove_dir(backup)?;
+    finish_reader_rotation(&lock)?;
     println!("Reader password rotation passed; temporary previous credentials removed");
     Ok(())
 }
 
+fn finish_reader_rotation(lock: &CredentialLock) -> Result<()> {
+    let path = &lock.config;
+    let backup = reader_backup(path)?;
+    let root = parent_directory(path)?;
+    let retired = root.join(format!(".verified-reader-password-{}", random_text(24)?));
+    fs::rename(backup, &retired)?;
+    fs::File::open(root)?.sync_all()?;
+    fs::remove_dir_all(&retired).context("remove verified previous credentials")?;
+    fs::File::open(root)?.sync_all()?;
+    Ok(())
+}
+
 fn state_path(config: &Path) -> Result<PathBuf> {
-    Ok(config
-        .parent()
-        .context("configuration needs a parent directory")?
-        .join("secrets.json"))
+    Ok(parent_directory(config)?.join("secrets.json"))
 }
 
 fn secrets(config: &Path) -> Result<Secrets> {
@@ -504,6 +676,7 @@ fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
 }
 
 pub(super) fn prepare(path: &Path) -> Result<()> {
+    let _lock = credential_lock(path, RotationAccess::Stable)?;
     let inputs = inputs(path)?;
     let state = state_path(path)?;
     let secret = if state.exists() {
@@ -521,10 +694,7 @@ pub(super) fn prepare(path: &Path) -> Result<()> {
     };
     let session = Session::login(&inputs, true)?;
     session.system("Raspberry Pi", &inputs.pi_host, &secret.pi_token)?;
-    let runtime = path
-        .parent()
-        .context("configuration needs a parent directory")?
-        .join("runtime");
+    let runtime = parent_directory(path)?.join("runtime");
     fs::create_dir_all(&runtime)?;
     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
     let hub = format!(
@@ -563,6 +733,7 @@ pub(super) fn prepare(path: &Path) -> Result<()> {
 }
 
 pub(super) fn retire_nas(path: &Path) -> Result<()> {
+    let _lock = credential_lock(path, RotationAccess::Stable)?;
     let inputs = inputs(path)?;
     ensure!(
         !inputs
@@ -573,10 +744,7 @@ pub(super) fn retire_nas(path: &Path) -> Result<()> {
     );
     let mut secret = secrets(path)?;
     Session::login(&inputs, false)?.retire_system("Synology NAS")?;
-    let runtime = path
-        .parent()
-        .context("configuration needs a parent directory")?
-        .join("runtime");
+    let runtime = parent_directory(path)?.join("runtime");
     for name in ["nas-agent.env", "nas-install.txt"] {
         let file = runtime.join(name);
         if file.exists() {
@@ -611,6 +779,13 @@ fn configure_rules(session: &Session, required: &[String], offline: &[String]) -
             .find(|item| item["name"] == *name)
             .with_context(|| format!("missing system {name}"))?;
         let id = string(system, "id")?;
+        if !offline.contains(name) {
+            for obsolete in alerts.iter().filter(|item| {
+                item["system"] == id && item["name"] == "Status" && item["user"] == session.user_id
+            }) {
+                session.delete("alerts", string(obsolete, "id")?)?;
+            }
+        }
         let mut rules = vec![("Disk", 90, 10)];
         if offline.contains(name) {
             rules.push(("Status", 0, 5));
@@ -618,10 +793,9 @@ fn configure_rules(session: &Session, required: &[String], offline: &[String]) -
         for (name, value, minutes) in rules {
             let rule =
                 json!({"name":name,"value":value,"min":minutes,"system":id,"user":session.user_id});
-            if let Some(existing) = alerts
-                .iter()
-                .find(|item| item["system"] == id && item["name"] == name)
-            {
+            if let Some(existing) = alerts.iter().find(|item| {
+                item["system"] == id && item["name"] == name && item["user"] == session.user_id
+            }) {
                 session.update("alerts", string(existing, "id")?, &rule)?;
             } else {
                 session.create("alerts", &rule)?;
@@ -634,10 +808,6 @@ fn configure_rules(session: &Session, required: &[String], offline: &[String]) -
 fn verify_rules(session: &Session, required: &[String], offline: &[String]) -> Result<()> {
     let systems = session.records("systems")?;
     let alerts = session.records("alerts")?;
-    ensure!(
-        alerts.len() == required.len() + offline.len(),
-        "unexpected alert count"
-    );
     for name in required {
         let system = systems
             .iter()
@@ -646,7 +816,11 @@ fn verify_rules(session: &Session, required: &[String], offline: &[String]) -> R
         let id = string(system, "id")?;
         let rules = alerts
             .iter()
-            .filter(|item| item["system"] == id)
+            .filter(|item| {
+                item["system"] == id
+                    && item["user"] == session.user_id
+                    && matches!(item["name"].as_str(), Some("Disk" | "Status"))
+            })
             .collect::<Vec<_>>();
         ensure!(
             rules.len() == 1 + usize::from(offline.contains(name)),
@@ -841,7 +1015,164 @@ fn notification_checks(base: Url, secret: &Secrets) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_published_message, password_hash, replace_reader_hash, validate_url};
+    use super::{
+        RotationAccess, Secrets, credential_lock, has_published_message, inputs, password_hash,
+        prepare, private_replace, private_write, random_text, reader_password_resume,
+        replace_reader_hash, rotate_reader_password, validate_url,
+    };
+    use serde_json::json;
+    use std::{fs, io::Write, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    pub(super) struct Directory(pub(super) PathBuf);
+
+    impl Directory {
+        pub(super) fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("monitoring-test-{}", random_text(20).unwrap()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn config(&self, names: serde_json::Value) -> PathBuf {
+            let path = self.0.join("client.json");
+            private_write(&path, &serde_json::to_vec(&json!({
+                "credentials_file": self.0.join("missing-credentials"),
+                "public_key_file": self.0.join("missing-key"),
+                "source_url":"https://fixture.example.ts.net", "hub_url":"https://fixture.example.ts.net",
+                "ntfy_url":"https://fixture.example.ts.net", "pi_host":"fixture.example.ts.net",
+                "required_systems":names, "offline_systems":[]
+            })).unwrap()).unwrap();
+            path
+        }
+    }
+
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn refuses_repeated_target_names() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Mac", "Linux", "Pi"]));
+        assert!(inputs(&path).is_err());
+    }
+
+    #[test]
+    fn refuses_cleartext_tailnet_credentials() {
+        assert!(validate_url("http://100.64.0.1:8090").is_err());
+    }
+
+    #[test]
+    fn preserves_saved_credentials_when_a_replacement_write_fails() {
+        let directory = Directory::new();
+        let path = directory.0.join("state.json");
+        private_write(&path, b"original").unwrap();
+        let result = private_replace(&path, |file| {
+            file.write_all(b"partial")?;
+            anyhow::bail!("injected write failure")
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn writes_private_files_with_a_relative_leaf_name() {
+        let name = format!(".credential-test-{}", random_text(24).unwrap());
+        let path = std::path::Path::new(&name);
+        let result = private_write(path, b"synthetic");
+        let bytes = fs::read(path);
+        let cleanup = fs::remove_file(path);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(bytes.unwrap(), b"synthetic");
+        cleanup.unwrap();
+    }
+
+    #[test]
+    fn blocks_preparation_during_a_pending_reader_rotation() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Windows", "Linux", "Pi"]));
+        fs::create_dir(directory.0.join("reader-password-backup")).unwrap();
+        fs::set_permissions(
+            directory.0.join("reader-password-backup"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let error = prepare(&path).unwrap_err();
+        assert!(format!("{error:#}").contains("pending rotation"));
+        assert!(!directory.0.join("secrets.json").exists());
+    }
+
+    #[test]
+    fn resumes_an_interrupted_reader_rotation_without_changing_publisher() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Windows", "Linux", "Pi"]));
+        let state = Secrets {
+            publisher_password: "synthetic-publisher".into(),
+            reader_password: "synthetic-reader".into(),
+            publisher_token: "synthetic-token".into(),
+            pi_token: "synthetic-agent".into(),
+            nas_token: None,
+        };
+        fs::create_dir(directory.0.join("runtime")).unwrap();
+        private_write(
+            &directory.0.join("secrets.json"),
+            &serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let environment = b"NTFY_AUTH_USERS=beszel:publisher-hash:user,iphone:reader-hash:user\nNTFY_AUTH_ACCESS=beszel:home-status:wo,iphone:home-status:ro\n";
+        private_write(&directory.0.join("runtime/ntfy.env"), environment).unwrap();
+        private_write(
+            &directory.0.join("runtime/iphone.txt"),
+            b"Previous synthetic phone configuration",
+        )
+        .unwrap();
+        rotate_reader_password(&path, &"x".repeat(64)).unwrap();
+        private_write(&directory.0.join("runtime/ntfy.env"), environment).unwrap();
+        private_write(
+            &directory.0.join("secrets.json"),
+            &serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert!(prepare(&path).is_err());
+        reader_password_resume(&path).unwrap();
+        reader_password_resume(&path).unwrap();
+        let saved: Secrets =
+            serde_json::from_slice(&fs::read(directory.0.join("secrets.json")).unwrap()).unwrap();
+        assert_eq!(saved.reader_password, "x".repeat(64));
+        assert_eq!(saved.publisher_password, state.publisher_password);
+        let updated = fs::read_to_string(directory.0.join("runtime/ntfy.env")).unwrap();
+        assert!(updated.contains("beszel:publisher-hash:user"));
+        assert!(!updated.contains("iphone:reader-hash:user"));
+        assert!(
+            directory
+                .0
+                .join("reader-password-backup/secrets.json")
+                .exists()
+        );
+        private_write(
+            &directory.0.join("runtime/ntfy.env"),
+            b"Unrelated operator change",
+        )
+        .unwrap();
+        assert!(reader_password_resume(&path).is_err());
+        assert_eq!(
+            fs::read(directory.0.join("runtime/ntfy.env")).unwrap(),
+            b"Unrelated operator change"
+        );
+    }
+
+    #[test]
+    fn serializes_credential_operations_and_releases_the_lock() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Windows", "Linux", "Pi"]));
+        let lock = credential_lock(&path, RotationAccess::Stable).unwrap();
+        assert!(credential_lock(&path, RotationAccess::Stable).is_err());
+        drop(lock);
+        assert!(credential_lock(&path, RotationAccess::Stable).is_ok());
+    }
 
     #[test]
     fn refuses_passwords_that_bcrypt_would_truncate() {
@@ -912,8 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_encrypted_tailnet_and_existing_private_origin() {
+    fn accepts_encrypted_tailnet_origins() {
         assert!(validate_url("https://device.example.ts.net:8443").is_ok());
-        assert!(validate_url("http://100.64.0.1:8090").is_ok());
     }
 }

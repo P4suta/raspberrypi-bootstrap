@@ -69,8 +69,16 @@ pub(super) fn initialize(mise: &Path, agent: &Path) -> Result<()> {
     );
     let source = std::env::current_dir()?;
     let workspace = source.join(".local/preflight");
+    let exists = Command::new("orb")
+        .args(["info", MACHINE, "--format", "json"])
+        .output()?;
+    if exists.status.success() {
+        validate_machine(&source)?;
+        command("orb", &["stop", MACHINE])?;
+    }
     let tools = workspace.join("tools");
-    fs::create_dir_all(&tools)?;
+    fs::create_dir_all(&workspace)?;
+    destination_directory(&tools)?;
     for (binary, name, expected) in [
         (mise, "mise", MISE_SHA256),
         (agent, "beszel-agent", AGENT_SHA256),
@@ -84,12 +92,9 @@ pub(super) fn initialize(mise: &Path, agent: &Path) -> Result<()> {
             String::from_utf8(output.stdout)?.split_whitespace().next() == Some(expected),
             "rehearsal binary does not match its pinned release"
         );
-        fs::copy(binary, tools.join(name))?;
+        copy(binary, &tools.join(name))?;
         fs::set_permissions(tools.join(name), fs::Permissions::from_mode(0o755))?;
     }
-    let exists = Command::new("orb")
-        .args(["info", MACHINE, "--format", "json"])
-        .output()?;
     if !exists.status.success() {
         let mount = format!("{}:/workspace", fs::canonicalize(&workspace)?.display());
         command(
@@ -113,6 +118,7 @@ pub(super) fn initialize(mise: &Path, agent: &Path) -> Result<()> {
             ],
         )?;
     }
+    command("orb", &["start", MACHINE])?;
     validate_machine(&source)?;
     println!("Isolated ARM64 Debian rehearsal machine and pinned tools are ready");
     Ok(())
@@ -124,14 +130,34 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
         !metadata.file_type().is_symlink(),
         "rehearsal sources must not contain symlinks"
     );
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) => ensure!(
+            !metadata.file_type().is_symlink(),
+            "rehearsal destinations must not contain symlinks"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     if metadata.is_dir() {
-        fs::create_dir_all(destination)?;
+        destination_directory(destination)?;
         for entry in fs::read_dir(source)? {
             let entry = entry?;
             copy(&entry.path(), &destination.join(entry.file_name()))?;
         }
     } else {
         fs::copy(source, destination)?;
+    }
+    Ok(())
+}
+
+fn destination_directory(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "rehearsal destination must be a real directory"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }
@@ -159,8 +185,9 @@ pub(super) fn local() -> Result<()> {
     let source = std::env::current_dir()?;
     crate::check(&source)?;
     validate_machine(&source)?;
+    command("orb", &["stop", MACHINE])?;
     let staged = source.join(".local/preflight/source");
-    fs::create_dir_all(&staged)?;
+    destination_directory(&staged)?;
     for name in [
         "Cargo.toml",
         "Cargo.lock",
@@ -180,10 +207,14 @@ pub(super) fn local() -> Result<()> {
     ] {
         copy(&source.join(name), &staged.join(name))?;
     }
-    fs::copy(
-        source.join("verification/preflight/mise.toml"),
-        staged.join("mise.toml"),
+    copy(
+        &source.join("verification/preflight/mise.toml"),
+        &staged.join("mise.toml"),
     )?;
+    command("orb", &["start", MACHINE])?;
+    for name in ["mise.toml", "mise.apps.toml", "mise.monitoring.toml"] {
+        orb(&["/workspace/tools/mise", "trust", name])?;
+    }
     orb(&[
         "env",
         "MISE_ENV=apps,monitoring",
@@ -237,6 +268,7 @@ pub(super) fn local() -> Result<()> {
         "check",
         "reader-password",
         "alerts",
+        "policy",
         "restore",
         "checkpoint",
     ] {
@@ -485,13 +517,34 @@ fn seed() -> Result<()> {
 }
 
 fn wait_up(session: &Session) -> Result<()> {
+    wait_up_after(session, &[])
+}
+
+fn agent_ready(systems: &[Value], statistics: &[Value], previous: &[String]) -> bool {
+    systems.iter().any(|system| {
+        system["name"] == SYSTEM
+            && system["status"] == "up"
+            && statistics.iter().any(|record| {
+                record["system"] == system["id"]
+                    && record["id"]
+                        .as_str()
+                        .is_some_and(|id| !previous.iter().any(|old| old == id))
+            })
+    })
+}
+
+fn wait_up_after(session: &Session, previous: &[String]) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
-        if session
-            .records("systems")?
-            .iter()
-            .any(|system| system["name"] == SYSTEM && system["status"] == "up")
-            && !session.records("system_stats")?.is_empty()
+        if Command::new("systemctl")
+            .args(["is-active", "--quiet", "monitoring-agent.service"])
+            .status()?
+            .success()
+            && agent_ready(
+                &session.records("systems")?,
+                &session.records("system_stats")?,
+                previous,
+            )
         {
             return Ok(());
         }
@@ -747,6 +800,43 @@ fn retirement() -> Result<()> {
     Ok(())
 }
 
+fn policy() -> Result<()> {
+    let session = session()?;
+    let targets = [SYSTEM, "Preflight Mac", "Preflight Windows", "Preflight Pi"].map(str::to_owned);
+    configure_rules(&session, &targets, &targets[..2])?;
+    let systems = session.records("systems")?;
+    let mac = systems
+        .iter()
+        .find(|system| system["name"] == "Preflight Mac")
+        .context("policy fixture target is missing")?;
+    let mac_id = string(mac, "id")?;
+    let unrelated = session.create(
+        "alerts",
+        &json!({"name":"CPU", "value":100, "min":10, "system":mac_id, "user":session.user_id}),
+    )?;
+    let result = (|| -> Result<()> {
+        configure_rules(&session, &targets, &targets[..1])?;
+        let alerts = session.records("alerts")?;
+        ensure!(
+            !alerts
+                .iter()
+                .any(|alert| alert["system"] == mac_id && alert["name"] == "Status"),
+            "obsolete disconnect rule remains active"
+        );
+        ensure!(
+            alerts.iter().any(|alert| alert["id"] == unrelated["id"]),
+            "policy reconciliation removed an unrelated rule"
+        );
+        super::verify_rules(&session, &targets, &targets[..1])
+    })();
+    let cleanup = session.delete("alerts", string(&unrelated, "id")?);
+    super::finish_cleanup(result, cleanup)?;
+    println!(
+        "Changed disconnect targets removed obsolete rules and preserved an unrelated CPU rule"
+    );
+    Ok(())
+}
+
 fn pagination() -> Result<()> {
     let session = session()?;
     let initial = session
@@ -866,6 +956,12 @@ fn reader_password() -> Result<()> {
             super::verify_reader_rotation(Url::parse(NTFY)?, &fixture.secrets, &active)?;
         }
         super::hub_notification(&session()?, &active)?;
+        let lock = super::credential_lock(&config, super::RotationAccess::Pending)?;
+        super::finish_reader_rotation(&lock)?;
+        ensure!(
+            !super::reader_backup(&config)?.exists(),
+            "verified previous credentials remain"
+        );
         Ok(())
     })();
     let restored = (|| -> Result<()> {
@@ -915,7 +1011,7 @@ fn resumed() -> Result<()> {
     let previous: Snapshot =
         serde_json::from_slice(&private_read(&Path::new(ROOT).join("checkpoint.json"))?)?;
     let session = session()?;
-    wait_up(&session)?;
+    wait_up_after(&session, &previous.statistics)?;
     let actual = snapshot(&session)?;
     assert_snapshot(&previous, &actual)?;
     ensure!(
@@ -974,7 +1070,7 @@ fn restore() -> Result<()> {
     app(&["systemctl", "--user", "start", "monitoring-beszel.service"])?;
     command("systemctl", &["start", "monitoring-agent.service"])?;
     let restored = session()?;
-    wait_up(&restored)?;
+    wait_up_after(&restored, &previous.statistics)?;
     let actual = snapshot(&restored)?;
     assert_snapshot(&previous, &actual)?;
     println!(
@@ -1000,11 +1096,55 @@ pub(super) fn run(action: &str) -> Result<()> {
         "check" => check(),
         "alerts" => alerts(),
         "retirement" => retirement(),
+        "policy" => policy(),
         "pagination" => pagination(),
         "reader-password" => reader_password(),
         "restore" => restore(),
         "checkpoint" => checkpoint(),
         "resumed" => resumed(),
         _ => bail!("unknown fixture action"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::Directory;
+    use super::{SYSTEM, agent_ready, copy};
+    use serde_json::json;
+    use std::{fs, os::unix::fs::symlink};
+
+    #[test]
+    fn refuses_guest_created_destination_symlinks() {
+        let directory = Directory::new();
+        let source = directory.0.join("source");
+        let protected = directory.0.join("protected");
+        let destination = directory.0.join("destination");
+        fs::write(&source, b"replacement").unwrap();
+        fs::write(&protected, b"preserved").unwrap();
+        symlink(&protected, &destination).unwrap();
+        let result = copy(&source, &destination);
+        assert!(result.is_err());
+        assert_eq!(fs::read(protected).unwrap(), b"preserved");
+    }
+
+    #[test]
+    fn rejects_persisted_or_unrelated_statistics_after_restart() {
+        let systems = [json!({"id":"system", "name":SYSTEM, "status":"up"})];
+        let previous = ["previous".to_owned()];
+        assert!(!agent_ready(
+            &systems,
+            &[json!({"id":"previous", "system":"system"})],
+            &previous
+        ));
+        assert!(!agent_ready(
+            &systems,
+            &[json!({"id":"current", "system":"other"})],
+            &previous
+        ));
+        assert!(agent_ready(
+            &systems,
+            &[json!({"id":"current", "system":"system"})],
+            &previous
+        ));
     }
 }

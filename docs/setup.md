@@ -77,20 +77,22 @@ ssh USER@HOST.local true
 If hostname discovery fails, find the Pi in the router's connected devices and use its IP address as the SSH destination.
 The [official remote access guide](https://www.raspberrypi.com/documentation/computers/remote-access.html) describes SSH enablement and address discovery.
 
-## Copy the provisioning files
+## Fetch the public configuration
 
-Run the following commands from the repository root on the Mac.
-The explicit file selection keeps local credentials and Git metadata out of the transfer.
+Connect from the Mac with the configured login.
 
 ```sh
-ssh USER@HOST.local mkdir -p projects/raspberrypi-bootstrap
-scp -r mise.toml mise.armhf.toml mise.arm64.toml mise.checks.toml repository.toml justfile Cargo.toml Cargo.lock deny.toml .gitleaks.toml xtask apps boot image verification config USER@HOST.local:projects/raspberrypi-bootstrap/
 ssh USER@HOST.local
 ```
 
-In the Pi's shell, enter the copied directory before running the remaining setup commands.
+In the Pi's shell, clone the public repository before running the remaining setup commands.
+The clone includes every deployment profile, verification command, and workflow without private runtime files.
 
 ```sh
+sudo apt-get update
+sudo apt-get install --yes ca-certificates git
+mkdir -p projects
+git clone https://github.com/P4suta/raspberrypi-bootstrap.git projects/raspberrypi-bootstrap
 cd projects/raspberrypi-bootstrap
 ```
 

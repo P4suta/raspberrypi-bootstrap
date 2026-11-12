@@ -5,7 +5,7 @@ use std::{env, fs, path::Path};
 mod operations;
 mod publication;
 
-const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-check|configure|status|notifications|verify CONFIG";
+const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -52,6 +52,12 @@ fn validate_container(document: &str) -> Result<()> {
             ensure!(part.parse::<u16>()? > 0, "port zero is not allowed");
         }
     }
+    ensure!(
+        values(document, "PodmanArgs")?
+            .iter()
+            .all(|value| *value == "--security-opt=no-new-privileges"),
+        "PodmanArgs may only reinforce the declared privilege boundary"
+    );
     for (name, required) in [
         ("User", "10001:10001"),
         ("ReadOnly", "true"),
@@ -69,6 +75,10 @@ fn validate_container(document: &str) -> Result<()> {
 fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
     validate_container(hub).context("hub")?;
     validate_container(ntfy).context("ntfy")?;
+    ensure!(
+        server["auth-file"] == "/var/lib/ntfy/auth.db",
+        "persistent authentication backend is required"
+    );
     ensure!(
         server["auth-default-access"] == "deny-all",
         "anonymous access must be denied"
@@ -103,6 +113,9 @@ fn main() -> Result<()> {
         [command, config] if command == "reader-password-check" => {
             operations::reader_password_check(Path::new(config))
         }
+        [command, config] if command == "reader-password-resume" => {
+            operations::reader_password_resume(Path::new(config))
+        }
         [command, config] if command == "configure" => operations::configure(Path::new(config)),
         [command, config] if command == "status" => operations::status(Path::new(config)),
         [command, config] if command == "verify" => operations::verify(Path::new(config)),
@@ -131,7 +144,7 @@ fn check(root: &Path) -> Result<()> {
 mod tests {
     use super::validate_documents;
     use anyhow::Result;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn container(image: &str, port: &str) -> String {
         format!(
@@ -143,12 +156,65 @@ mod tests {
         format!("example.invalid/service@sha256:{}", "a".repeat(64))
     }
 
+    fn server() -> Value {
+        json!({"auth-file":"/var/lib/ntfy/auth.db", "auth-default-access":"deny-all", "enable-signup":false})
+    }
+
+    #[test]
+    fn refuses_missing_or_volatile_authentication_backend() {
+        for backend in [
+            Value::Null,
+            json!(""),
+            json!(":memory:"),
+            json!("/tmp/auth.db"),
+        ] {
+            let mut config = server();
+            config["auth-file"] = backend;
+            assert!(
+                validate_documents(
+                    &container(&pinned(), "127.0.0.1:8090:8090"),
+                    &container(&pinned(), "127.0.0.1:8081:8080"),
+                    &config,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_podman_argument_listener_bypasses() {
+        for arguments in [
+            "--publish=0.0.0.0:9090:8090",
+            "--publish 0.0.0.0:9090:8090",
+            "-p0.0.0.0:9090:8090",
+            "-p 0.0.0.0:9090:8090",
+            "\"--publish=0.0.0.0:9090:8090\"",
+            "--publish-all",
+            "-P",
+            "--network=host",
+        ] {
+            let hub = format!(
+                "{}PodmanArgs={arguments}\n",
+                container(&pinned(), "127.0.0.1:8090:8090")
+            );
+            assert!(
+                validate_documents(
+                    &hub,
+                    &container(&pinned(), "127.0.0.1:8081:8080"),
+                    &server()
+                )
+                .is_err(),
+                "accepted {arguments}"
+            );
+        }
+    }
+
     #[test]
     fn accepts_private_pinned_services() -> Result<()> {
         validate_documents(
             &container(&pinned(), "127.0.0.1:8090:8090"),
             &container(&pinned(), "127.0.0.1:8081:8080"),
-            &json!({"auth-default-access":"deny-all", "enable-signup":false}),
+            &server(),
         )
     }
 
@@ -159,7 +225,7 @@ mod tests {
                 validate_documents(
                     &container(&pinned(), "127.0.0.1:8090:8090"),
                     &container(&pinned(), "127.0.0.1:8081:8080"),
-                    &json!({"auth-default-access":access,"enable-signup":false}),
+                    &json!({"auth-file":"/var/lib/ntfy/auth.db","auth-default-access":access,"enable-signup":false}),
                 )
                 .is_err()
             );
@@ -181,7 +247,7 @@ mod tests {
                 validate_documents(
                     &container(&image, port),
                     &container(&pinned(), "127.0.0.1:8081:8080"),
-                    &json!({"auth-default-access":"deny-all","enable-signup":false}),
+                    &server(),
                 )
                 .is_err()
             );
@@ -198,7 +264,7 @@ mod tests {
             validate_documents(
                 &container(&pinned(), "127.0.0.1:8090:8090"),
                 &ntfy,
-                &json!({"auth-default-access":"deny-all","enable-signup":false}),
+                &server(),
             )
             .is_err()
         );

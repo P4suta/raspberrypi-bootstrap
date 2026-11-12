@@ -14,6 +14,7 @@ check-source:
     mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
     mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml
     mise exec taplo@0.10.0 -- taplo lint --no-schema repository.toml deny.toml .gitleaks.toml
+    mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
     just check-cloud-init boot/tailscale-trixie-arm64.yaml
     just check-image-source
     cargo fmt --all -- --check
