@@ -1,0 +1,18 @@
+[Unit]
+Description=Enroll the device for private administration
+Requires=tailscaled.service systemd-time-wait-sync.service
+Wants=network-online.target
+After=network-online.target tailscaled.service systemd-time-wait-sync.service
+ConditionPathExists=!/var/lib/tailscale-enrollment/complete
+
+[Service]
+Type=oneshot
+StateDirectory=tailscale-enrollment
+ExecStartPre=/usr/bin/test -f /run/systemd/timesync/synchronized
+ExecStart=/usr/bin/tailscale up --ssh
+ExecStartPost=/usr/bin/touch /var/lib/tailscale-enrollment/complete
+TimeoutStartSec=infinity
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+[Unit]
+Description=Private Beszel host metrics agent
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/apps/.config/monitoring/pi-agent.env
+
+[Service]
+User=apps
+Group=apps
+Environment=DATA_DIR=/var/lib/beszel-agent
+EnvironmentFile=/var/lib/apps/.config/monitoring/pi-agent.env
+ExecStart=/var/lib/apps/monitoring/bin/beszel-agent
+Restart=on-failure
+RestartSec=5
+StateDirectory=beszel-agent
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryMax=128M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

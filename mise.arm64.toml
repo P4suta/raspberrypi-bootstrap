@@ -1,0 +1,15 @@
+[settings.rust]
+default_host = "aarch64-unknown-linux-gnu"
+
+[tool_alias]
+just = "github:casey/just"
+
+[tools.just]
+version = "1.59.0"
+asset_pattern = "just-*-aarch64-unknown-linux-musl.tar.gz"
+checksum = "sha256:23871b1702bfd550fb5f901778fd4290ecf2ee034a45a889fbe96d89b188086d"
+
+[bootstrap.apt.sources.tailscale]
+uris = "https://pkgs.tailscale.com/stable/debian"
+key = "https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg"
+fingerprint = "2596A99EAAB33821893C0A79458CA832957F5868"

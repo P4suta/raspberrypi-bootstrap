@@ -1,0 +1,69 @@
+# METABEGIN
+#
+# X-Env-Layer-Name: tailscale-development
+#
+# X-Env-Layer-Desc: Private administration and native development tools.
+#
+# X-Env-Layer-Version: 0.1.6
+#
+# X-Env-Layer-Requires: openssh-server,systemd-timesyncd
+#
+# X-Env-VarPrefix: access
+#
+# X-Env-Var-source: ${@SRCROOT}
+#
+# X-Env-Var-source-Desc: Directory containing the image configuration.
+#
+# X-Env-Var-source-Required: y
+#
+# X-Env-Var-source-Valid: dir
+#
+# X-Env-Var-source-Set: y
+#
+# X-Env-Var-recovery_key:
+#
+# X-Env-Var-recovery_key-Desc: Path to the recovery SSH public key.
+#
+# X-Env-Var-recovery_key-Required: y
+#
+# X-Env-Var-recovery_key-Valid: file-nzero
+#
+# X-Env-Var-recovery_key-Set: n
+#
+# METAEND
+---
+mmdebstrap:
+  setup-hooks:
+    - install -D -m 0644 "${IGconf_access_source}/mise-tailscale.sources" "$1/etc/apt/sources.list.d/mise-tailscale.sources"
+  packages:
+    - build-essential
+    - ca-certificates
+    - curl
+    - git
+    - gnupg
+    - pkg-config
+    - tailscale
+  customize-hooks:
+    - chroot "$1" ssh-keygen -lf "/home/${IGconf_device_user1}/.ssh/authorized_keys"
+    - |
+      set -eu
+      target_home="$1/home/${IGconf_device_user1}"
+      install -d -m 0755 "$target_home/.local/bin" "$target_home/projects/raspberrypi-bootstrap"
+      curl --fail --location --output "$target_home/.local/bin/mise" https://github.com/jdx/mise/releases/download/v2026.10.24/mise-v2026.10.24-linux-arm64
+      printf '%s  %s\n' ae1151a87d70146119f68f7378001a12f09d2a38853087ed6139b7527a55f148 "$target_home/.local/bin/mise" | sha256sum --check -
+      chmod 0755 "$target_home/.local/bin/mise"
+      install -m 0644 "${IGconf_access_source}/../mise.toml" "${IGconf_access_source}/../mise.arm64.toml" "${IGconf_access_source}/../mise.armhf.toml" "${IGconf_access_source}/../mise.apps.toml" "${IGconf_access_source}/../mise.sites.toml" "${IGconf_access_source}/../repository.toml" "${IGconf_access_source}/../justfile" "$target_home/projects/raspberrypi-bootstrap/"
+      cp -a "${IGconf_access_source}/../boot" "${IGconf_access_source}" "${IGconf_access_source}/../verification" "${IGconf_access_source}/../config" "${IGconf_access_source}/../apps" "$target_home/projects/raspberrypi-bootstrap/"
+      chroot "$1" chown -R "${IGconf_device_user1}:${IGconf_device_user1}" "/home/${IGconf_device_user1}/.local" "/home/${IGconf_device_user1}/projects"
+      uchroot "$1" 'set -eu; export PATH="$HOME/.local/bin:$PATH"; cd "$HOME/projects/raspberrypi-bootstrap"; MISE_ENV=arm64 mise trust; MISE_ENV=arm64 mise bootstrap --yes --only packages,tools'
+    - chroot "$1" systemd-analyze verify /etc/systemd/system/tailscale-enrollment.service
+    - chroot "$1" test -r /usr/lib/aarch64-linux-gnu/security/pam_systemd.so
+    - $BDEBSTRAP_HOOKS/enable-units "$1" tailscaled.service tailscale-enrollment.service
+  cleanup-hooks:
+    - uchroot "$1" 'set -eu; export PATH="$HOME/.local/bin:$PATH"; cd "$HOME/projects/raspberrypi-bootstrap"; MISE_ENV=arm64 mise bootstrap --yes --only files'
+    - systemctl --root="$1" mask iwd.service bluetooth.service hciuart.service
+    - chroot "$1" systemd-analyze verify --man=no local-fs.target systemd-growfs-root.service
+    - test "$(systemctl --root="$1" is-enabled iwd.service)" = masked
+    - test "$(systemctl --root="$1" is-enabled bluetooth.service)" = masked
+    - test "$(systemctl --root="$1" is-enabled hciuart.service)" = masked
+    - cmp "${IGconf_access_source}/../config/radio-policy.txt" "$1/boot/firmware/radio-policy.txt"

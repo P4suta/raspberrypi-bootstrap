@@ -1,0 +1,9 @@
+device:
+  layer: rpi5
+  user1sudo: invalid
+
+image:
+  layer: image-rpios
+
+layer:
+  base: trixie-minbase

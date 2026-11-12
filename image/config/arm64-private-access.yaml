@@ -1,0 +1,18 @@
+device:
+  layer: rpi5
+  user1sudo: nopasswd
+
+image:
+  layer: image-rpios
+  name: arm64-private-access
+  idp_enable: n
+  boot_part_size: 200%
+  root_part_size: 300%
+
+layer:
+  base: trixie-minbase
+  access: tailscale-development
+
+ssh:
+  pubkey_user1: ${IGconf_access_recovery_key}
+  pubkey_only: y

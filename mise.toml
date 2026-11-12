@@ -1,0 +1,70 @@
+min_version = "2026.10.24"
+
+[tools]
+rust = { version = "1.99.0", components = ["clippy", "rustfmt"] }
+just = "1.59.0"
+
+[bootstrap.packages]
+"apt:build-essential" = "latest"
+"apt:ca-certificates" = "latest"
+"apt:cloud-initramfs-growroot" = "latest"
+"apt:curl" = "latest"
+"apt:dbus-user-session" = "latest"
+"apt:git" = "latest"
+"apt:gnupg" = "latest"
+"apt:libpam-systemd" = "latest"
+"apt:openssh-server" = "latest"
+"apt:pkg-config" = "latest"
+"apt:tailscale" = "latest"
+
+[bootstrap.files."/etc/apt/sources.list.d/0002mise-tailscale.sources"]
+os = "linux"
+state = "absent"
+phase = "pre-packages"
+
+[bootstrap.files."/boot/firmware/radio-policy.txt"]
+os = "linux"
+source = "config/radio-policy.txt"
+owner = "root"
+group = "root"
+mode = "0755"
+
+[bootstrap.directories."/etc/systemd/system/local-fs.target.d"]
+os = "linux"
+owner = "root"
+group = "root"
+mode = "0755"
+
+[bootstrap.files."/etc/systemd/system/local-fs.target.d/10-root-growth.conf"]
+os = "linux"
+content = """
+[Unit]
+Wants=systemd-growfs-root.service
+After=systemd-growfs-root.service
+"""
+owner = "root"
+group = "root"
+mode = "0644"
+
+[bootstrap.services.iwd]
+state = "stopped"
+enabled = false
+masked = true
+
+[bootstrap.services.bluetooth]
+state = "stopped"
+enabled = false
+masked = true
+
+[bootstrap.services.hciuart]
+state = "stopped"
+enabled = false
+masked = true
+
+[bootstrap.services.ssh]
+state = "running"
+enabled = true
+
+[bootstrap.services.tailscaled]
+state = "running"
+enabled = true

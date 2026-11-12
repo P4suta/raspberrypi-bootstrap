@@ -1,0 +1,15 @@
+[settings.rust]
+default_host = "armv7-unknown-linux-gnueabihf"
+
+[tool_alias]
+just = "github:casey/just"
+
+[tools.just]
+version = "1.59.0"
+asset_pattern = "just-*-armv7-unknown-linux-musleabihf.tar.gz"
+checksum = "sha256:928e2a0fe5fcade06415c55210608efefe43e985a757ded3e219ac4a13b6ed0e"
+
+[bootstrap.apt.sources.tailscale]
+uris = "https://pkgs.tailscale.com/stable/raspbian"
+key = "https://pkgs.tailscale.com/stable/raspbian/bookworm.noarmor.gpg"
+fingerprint = "2596A99EAAB33821893C0A79458CA832957F5868"

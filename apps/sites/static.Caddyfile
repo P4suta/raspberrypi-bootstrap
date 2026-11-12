@@ -1,0 +1,18 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:8080 {
+	encode zstd gzip
+	redir / /study/ 308
+	redir /study /study/ 308
+	handle_path /study/* {
+		root * /srv
+		file_server
+	}
+	handle {
+		respond 404
+	}
+}

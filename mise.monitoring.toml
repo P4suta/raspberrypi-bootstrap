@@ -1,0 +1,70 @@
+[bootstrap.packages]
+"apt:aardvark-dns" = "latest"
+"apt:nftables" = "latest"
+
+[bootstrap.directories."/var/lib/apps/.config/monitoring"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/monitoring"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/monitoring/bin"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/monitoring-beszel.container"]
+os = "linux"
+source = "apps/monitoring/beszel.container"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/monitoring-ntfy.container"]
+os = "linux"
+source = "apps/monitoring/ntfy.container"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/beszel.volume"]
+os = "linux"
+source = "apps/monitoring/beszel.volume"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/ntfy.volume"]
+os = "linux"
+source = "apps/monitoring/ntfy.volume"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/monitoring.network"]
+os = "linux"
+source = "apps/monitoring/monitoring.network"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/monitoring/ntfy.json"]
+os = "linux"
+source = "apps/monitoring/ntfy.json"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/etc/systemd/system/monitoring-agent.service"]
+os = "linux"
+source = "apps/monitoring/agent.service"
+owner = "root"
+group = "root"
+mode = "0644"

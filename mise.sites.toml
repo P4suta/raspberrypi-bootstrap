@@ -1,0 +1,25 @@
+[bootstrap.directories."/var/lib/apps/.config/sites"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/sites"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/var/lib/apps/.config/sites/static.Caddyfile"]
+os = "linux"
+source = "apps/sites/static.Caddyfile"
+owner = "apps"
+group = "apps"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/site-study-player.container"]
+os = "linux"
+source = "apps/quadlet/site-study-player.container"
+owner = "apps"
+group = "apps"
+mode = "0644"

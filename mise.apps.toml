@@ -1,0 +1,98 @@
+[bootstrap.packages]
+"apt:podman" = "latest"
+"apt:uidmap" = "latest"
+"apt:passt" = "latest"
+"apt:fuse-overlayfs" = "latest"
+
+[bootstrap.services."netavark-dhcp-proxy.service"]
+state = "stopped"
+enabled = false
+masked = true
+
+[bootstrap.services."netavark-dhcp-proxy.socket"]
+state = "stopped"
+enabled = false
+masked = true
+
+[bootstrap.groups.apps]
+
+[bootstrap.users.apps]
+group = "apps"
+groups = []
+exclusive_groups = true
+home = "/var/lib/apps"
+shell = "/usr/sbin/nologin"
+comment = "Rootless app services"
+create_home = true
+
+[bootstrap.directories."/var/lib/apps"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/.config"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/.config/containers"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/.config/containers/systemd"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/notes-silverbullet.container"]
+os = "linux"
+state = "absent"
+
+[bootstrap.directories."/var/lib/apps/.config/systemd/user"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/backups"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/var/lib/apps/.config/systemd/user/notes-export.service"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/notes-silverbullet.volume"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/notes-memos.container"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/notes-memos.volume"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/backups/notes-silverbullet.tar"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/backups/notes-memos.tar"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/backups/.notes-silverbullet.tar.partial"]
+os = "linux"
+state = "absent"
+
+[bootstrap.files."/var/lib/apps/backups/.notes-memos.tar.partial"]
+os = "linux"
+state = "absent"

@@ -1,0 +1,29 @@
+[Unit]
+Description=Private Beszel metrics hub
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=%h/.config/monitoring/hub.env
+
+[Container]
+# renovate: version=0.21.0
+Image=docker.io/henrygd/beszel@sha256:6b39a8b64f9b15d00a25e7683e31a93c46161182a54f62713525107064e10599
+ContainerName=monitoring-beszel
+Network=monitoring.network
+PublishPort=127.0.0.1:8090:8090
+Volume=beszel.volume:/beszel_data:U
+EnvironmentFile=%h/.config/monitoring/hub.env
+User=10001:10001
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,size=32m,mode=1777
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+MemoryMax=512M
+TasksMax=128
+
+[Install]
+WantedBy=default.target

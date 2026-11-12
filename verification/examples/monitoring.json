@@ -1,0 +1,10 @@
+{
+  "credentials_file": "/path/to/beszel-credentials.txt",
+  "public_key_file": "/path/to/hub.pub",
+  "source_url": "https://source.example.ts.net:8443",
+  "hub_url": "https://pi.example.ts.net:8443",
+  "ntfy_url": "https://pi.example.ts.net:10443",
+  "pi_host": "pi.example.ts.net",
+  "required_systems": ["Mac", "Linux server", "Windows", "Raspberry Pi"],
+  "offline_systems": ["Linux server"]
+}

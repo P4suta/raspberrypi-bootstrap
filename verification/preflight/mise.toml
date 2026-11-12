@@ -1,0 +1,15 @@
+min_version = "2026.10.24"
+
+[env]
+CARGO_INCREMENTAL = "0"
+
+[tools]
+rust = { version = "1.99.0", components = ["clippy", "rustfmt"] }
+just = "1.59.0"
+
+[bootstrap.packages]
+"apt:build-essential" = "latest"
+"apt:ca-certificates" = "latest"
+"apt:dbus-user-session" = "latest"
+"apt:libpam-systemd" = "latest"
+"apt:pkg-config" = "latest"
