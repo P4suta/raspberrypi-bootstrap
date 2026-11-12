@@ -28,7 +28,7 @@ check-cloud-init config:
     mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile '{{ cloud_init_schema }}' --default-filetype yaml '{{ config }}'
 
 check-image-source:
-    mise exec yq@4.54.1 -- yq -r '.write_files[0].content | trim' boot/tailscale-trixie-arm64.yaml | cmp image/mise-tailscale.sources -
+    mise exec yq@4.54.3 -- yq -r '.write_files[0].content | trim' boot/tailscale-trixie-arm64.yaml | cmp image/mise-tailscale.sources -
 
 build-image generator config:
     install -d {{ quote(justfile_directory() / ".local/image-work") }}
