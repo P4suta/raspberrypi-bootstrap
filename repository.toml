@@ -1,0 +1,9 @@
+name = "raspberrypi-bootstrap"
+summary = "Bootstrap a wired Raspberry Pi with private SSH and rootless services"
+install = """
+mise trust
+mise install"""
+usage = """
+mise x -- just check"""
+copyright = "Yasunobu"
+license = "MIT OR Apache-2.0"
