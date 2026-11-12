@@ -47,6 +47,10 @@ impl SourcePath {
             .context("publication file needs a name")?
             .to_ascii_lowercase();
         ensure!(
+            name != ".env" && !name.starts_with(".env."),
+            "environment files cannot be published"
+        );
+        ensure!(
             ![
                 "secrets.json",
                 "client.json",
@@ -288,6 +292,9 @@ mod tests {
             ".local/monitoring/secrets.json",
             "target/debug/tool",
             "runtime/ntfy.env",
+            ".env",
+            ".env.production",
+            "config/.env.local",
             "boot/recovery.pem",
             "card.img.zst",
             "settings/credentials.txt",
