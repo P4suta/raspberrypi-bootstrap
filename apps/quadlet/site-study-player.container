@@ -1,0 +1,29 @@
+[Unit]
+Description=Private maintenance study player
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+# renovate: version=2.11.9
+Image=docker.io/library/caddy@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
+ContainerName=site-study-player
+PublishPort=127.0.0.1:8080:8080
+Volume=%h/sites/study-player/current:/srv:ro
+Volume=%h/.config/sites/static.Caddyfile:/etc/caddy/Caddyfile:ro
+User=10001:10001
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/data:rw,nodev,nosuid,noexec,size=16m,mode=1777
+Tmpfs=/config:rw,nodev,nosuid,noexec,size=16m,mode=1777
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,size=16m
+
+[Service]
+ExecStartPre=/usr/bin/test -s %h/sites/study-player/current/index.html
+Restart=on-failure
+RestartSec=3
+MemoryMax=256M
+TasksMax=128
+
+[Install]
+WantedBy=default.target

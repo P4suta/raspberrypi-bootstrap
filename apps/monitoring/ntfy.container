@@ -1,0 +1,32 @@
+[Unit]
+Description=Private ntfy notification service
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=%h/.config/monitoring/ntfy.env
+
+[Container]
+# renovate: version=2.37.2
+Image=docker.io/binwiederhier/ntfy@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7
+ContainerName=monitoring-ntfy
+Network=monitoring.network
+NetworkAlias=ntfy
+PublishPort=127.0.0.1:8081:8080
+Volume=ntfy.volume:/var/lib/ntfy:U
+Volume=%h/.config/monitoring/ntfy.json:/etc/ntfy/server.json:ro
+EnvironmentFile=%h/.config/monitoring/ntfy.env
+Exec=serve --config /etc/ntfy/server.json
+User=10001:10001
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,size=16m,mode=1777
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+MemoryMax=256M
+TasksMax=128
+
+[Install]
+WantedBy=default.target

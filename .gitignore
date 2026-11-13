@@ -6,6 +6,8 @@
 /.mise.*.local.toml
 /target/
 *.env
+.env
+.env.*
 *.pem
 *.key
 *.p12

@@ -1,0 +1,14 @@
+title = "Raspberry Pi source publication"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private-tailnet-host"
+description = "Keep device identities in machine-local configuration"
+regex = '''[a-zA-Z0-9][a-zA-Z0-9-]*\.tail[0-9a-f]+\.ts\.net'''
+
+[[rules]]
+id = "private-home-path"
+description = "Keep private checkout and account paths outside public source"
+regex = '''(?:/Users/|/home/)[a-zA-Z][a-zA-Z0-9._-]*/'''

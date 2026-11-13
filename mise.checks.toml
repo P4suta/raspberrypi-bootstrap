@@ -1,0 +1,8 @@
+[tools]
+taplo = "0.10.0"
+uv = "0.13.6"
+yq = "4.54.3"
+gitleaks = "8.30.1"
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
+cargo-deny = "0.20.2"
