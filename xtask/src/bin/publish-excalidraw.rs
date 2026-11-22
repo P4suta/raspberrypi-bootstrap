@@ -137,7 +137,12 @@ fn upload(transport: &mut Command, archive: &Path, id: &str) -> Result<()> {
 
 fn verify(client: &Client, url: &str, path: &Path) -> Result<()> {
     let expected = fs::read(path)?;
-    let response = client.get(url).send()?.error_for_status()?;
+    let response = client.get(url).send()?;
+    ensure!(
+        response.status() == reqwest::StatusCode::OK,
+        "readback returned {}",
+        response.status()
+    );
     let mut bytes = Vec::new();
     response
         .take(expected.len() as u64 + 1)
@@ -227,6 +232,71 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_accepts_only_an_https_origin_and_a_single_host_alias() {
+        let mut config = Config {
+            ssh_host: "fixture-host".into(),
+            origin: "https://example.invalid:1443".into(),
+        };
+        assert_eq!(config.origin().unwrap(), config.origin);
+        for origin in [
+            "http://example.invalid",
+            "https://reader@example.invalid",
+            "https://example.invalid/drawing",
+            "https://example.invalid/?view=1",
+            "https://example.invalid/#preview",
+        ] {
+            config.origin = origin.into();
+            assert!(config.origin().is_err());
+        }
+        config.origin = "https://example.invalid".into();
+        for alias in ["", "-host", "two hosts", "host/name"] {
+            config.ssh_host = alias.into();
+            assert!(config.origin().is_err());
+        }
+    }
+
+    #[test]
+    fn publication_requires_a_successful_readback_with_identical_bytes() -> Result<()> {
+        use std::net::TcpListener;
+        let drawing = env::temp_dir().join(format!("diagram-readback-{}", std::process::id()));
+        fs::write(&drawing, "scene")?;
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        for (status, contents, success) in [
+            (200, "scene", true),
+            (200, "scen", false),
+            (200, "scene!", false),
+            (302, "scene", false),
+            (404, "scene", false),
+        ] {
+            let listener = TcpListener::bind(("127.0.0.1", 0))?;
+            let origin = format!("http://{}", listener.local_addr()?);
+            let server = std::thread::spawn(move || -> std::io::Result<()> {
+                use std::io::BufRead;
+                let (mut stream, _) = listener.accept()?;
+                for line in std::io::BufReader::new(&stream).lines() {
+                    if line?.is_empty() {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{contents}",
+                    contents.len()
+                )
+            });
+            let verified = verify(&client, &origin, &drawing);
+            server.join().unwrap()?;
+            assert_eq!(verified.is_ok(), success, "HTTP {status}, {contents}");
+        }
+        fs::remove_file(drawing)?;
+        Ok(())
+    }
 
     #[test]
     fn sftp_only_exposes_complete_drawings_and_preserves_existing_replies() -> Result<()> {
