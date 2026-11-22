@@ -65,6 +65,7 @@ fn rootless_unit_uses_the_host_uid_and_exposes_only_a_loopback_listener() {
     let unit = source("apps/humidity/humidity-monitor.container");
     for line in [
         "UserNS=keep-id",
+        "User=%U:%G",
         "Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro",
         "PublishPort=127.0.0.1:8092:8080",
         "Network=monitoring.network",

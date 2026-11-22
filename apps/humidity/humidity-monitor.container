@@ -7,6 +7,7 @@ Image=localhost/humidity-monitor:installed
 Pull=never
 ContainerName=humidity-monitor
 UserNS=keep-id
+User=%U:%G
 Network=monitoring.network
 PublishPort=127.0.0.1:8092:8080
 Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
