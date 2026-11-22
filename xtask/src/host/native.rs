@@ -101,6 +101,7 @@ fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
         .open(&temporary)?;
     let mut operation = || -> Result<()> {
         file.write_all(content)?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
         fs::File::open(parent)?.sync_all()?;
@@ -116,6 +117,10 @@ fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
 }
 
 fn files(config: &Config) -> Result<Vec<FileChange>> {
+    files_with_boot(config, &fs::read_to_string(BOOT)?)
+}
+
+fn files_with_boot(config: &Config, boot: &str) -> Result<Vec<FileChange>> {
     Ok(vec![
         FileChange {
             name: "management-network",
@@ -130,9 +135,7 @@ fn files(config: &Config) -> Result<Vec<FileChange>> {
         FileChange {
             name: "kernel-command-line",
             path: BOOT.into(),
-            content: MemoryBootLine::parse(&fs::read_to_string(BOOT)?)?
-                .0
-                .into_bytes(),
+            content: MemoryBootLine::parse(boot)?.0.into_bytes(),
             mode: 0o755,
         },
         FileChange {
@@ -192,6 +195,87 @@ fn root() -> Result<()> {
     Ok(())
 }
 
+#[derive(PartialEq, Eq)]
+struct FileState {
+    bytes: Vec<u8>,
+    mode: u32,
+}
+
+fn file_state(path: &Path) -> Result<Option<FileState>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    ensure!(metadata.is_file(), "managed path must be a regular file");
+    Ok(Some(FileState {
+        bytes: fs::read(path)?,
+        mode: metadata.permissions().mode() & 0o777,
+    }))
+}
+
+fn original_file(backup: &Path, name: &str) -> Result<Option<FileState>> {
+    if backup.join(format!("{name}.absent")).try_exists()? {
+        return Ok(None);
+    }
+    Ok(Some(FileState {
+        bytes: fs::read(backup.join(name))?,
+        mode: fs::read_to_string(backup.join(format!("{name}.mode")))?.parse()?,
+    }))
+}
+
+fn restore_files(backup: &Path, files: &[FileChange]) -> Result<()> {
+    let mut changes = Vec::new();
+    for file in files {
+        let before = original_file(backup, file.name)?;
+        let current = file_state(&file.path)?;
+        if current == before {
+            continue;
+        }
+        let recorded = backup.join(format!("{}.applied", file.name));
+        let bytes = match fs::read(recorded) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => file.content.clone(),
+            Err(error) => return Err(error.into()),
+        };
+        let installed = FileState {
+            bytes,
+            mode: file.mode,
+        };
+        ensure!(
+            current.as_ref() == Some(&installed),
+            "{} changed after the managed update",
+            file.name
+        );
+        changes.push((&file.path, before, installed));
+    }
+    for (path, before, installed) in changes {
+        ensure!(
+            file_state(path)?.as_ref() == Some(&installed),
+            "managed file changed during recovery"
+        );
+        match before {
+            Some(original) => replace(path, &original.bytes, original.mode)?,
+            None => {
+                fs::remove_file(path)?;
+                sync_parent(path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> Result<()> {
+    let parent = path.parent().context("path has no parent")?;
+    fs::File::open(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })?
+    .sync_all()?;
+    Ok(())
+}
+
 pub(crate) fn plan(path: &Path) -> Result<()> {
     let config = config(path)?;
     let changed = files(&config)?
@@ -235,6 +319,11 @@ pub(crate) fn apply(path: &Path, backup: &Path) -> Result<()> {
         0o600,
     )?;
     for file in &files {
+        write_new(
+            &backup.join(format!("{}.applied", file.name)),
+            &file.content,
+            0o600,
+        )?;
         match fs::symlink_metadata(&file.path) {
             Ok(metadata) => {
                 ensure!(
@@ -255,12 +344,21 @@ pub(crate) fn apply(path: &Path, backup: &Path) -> Result<()> {
         }
     }
     write_new(&backup.join("pending"), b"", 0o600)?;
+    let unattempted = backup.join("serve-unchanged");
+    write_new(&unattempted, b"", 0o600)?;
+    fs::File::open(backup)?.sync_all()?;
+    sync_parent(backup)?;
     fs::create_dir_all(
         Path::new(PENDING)
             .parent()
             .context("pending update has no parent")?,
     )?;
-    write_new(
+    sync_parent(
+        Path::new(PENDING)
+            .parent()
+            .context("missing state directory")?,
+    )?;
+    replace(
         Path::new(PENDING),
         fs::canonicalize(backup)?
             .to_str()
@@ -270,11 +368,26 @@ pub(crate) fn apply(path: &Path, backup: &Path) -> Result<()> {
     )?;
     let change = || -> Result<()> {
         for file in &files {
+            ensure!(
+                file_state(&file.path)? == original_file(backup, file.name)?,
+                "managed file changed before application"
+            );
             replace(&file.path, &file.content, file.mode)?;
         }
         output(Command::new("/usr/bin/networkctl").arg("reload"))?;
         if before != after {
-            write_serve(&after, &tag)?;
+            fs::remove_file(&unattempted)?;
+            sync_parent(&unattempted)?;
+            if let Err(error) = write_serve(&after, &tag) {
+                if error
+                    .downcast_ref::<reqwest::Error>()
+                    .and_then(reqwest::Error::status)
+                    .is_some_and(|status| status.is_client_error())
+                {
+                    replace(&unattempted, b"", 0o600)?;
+                }
+                return Err(error);
+            }
         }
         let (actual, _) = read_serve()?;
         ensure!(
@@ -282,7 +395,9 @@ pub(crate) fn apply(path: &Path, backup: &Path) -> Result<()> {
             "HTTPS route readback failed"
         );
         fs::rename(backup.join("pending"), backup.join("complete"))?;
+        fs::File::open(backup)?.sync_all()?;
         fs::remove_file(PENDING)?;
+        sync_parent(Path::new(PENDING))?;
         Ok(())
     };
     if let Err(error) = change() {
@@ -314,48 +429,40 @@ fn restore_locked(backup: &Path) -> Result<()> {
     );
     if Path::new(PENDING).exists() {
         ensure!(
-            fs::canonicalize(backup)? == Path::new(fs::read_to_string(PENDING)?.trim()),
+            fs::canonicalize(backup)? == Path::new(&fs::read_to_string(PENDING)?),
             "a different host update is pending"
         );
     }
     let before: Value = serde_json::from_slice(&fs::read(backup.join("before-serve.json"))?)?;
     let applied: Value = serde_json::from_slice(&fs::read(backup.join("applied-serve.json"))?)?;
-    for (name, path) in [
-        ("management-network", NETWORK),
-        ("kernel-command-line", BOOT),
-        ("host-config", CONFIG),
-    ] {
-        let path = Path::new(path);
-        if backup.join(format!("{name}.absent")).exists() {
-            if path.exists() {
-                fs::remove_file(path)?;
-            }
-        } else {
-            let mode: u32 = fs::read_to_string(backup.join(format!("{name}.mode")))?.parse()?;
-            replace(path, &fs::read(backup.join(name))?, mode)?;
-        }
-    }
+    let boot = fs::read_to_string(backup.join("kernel-command-line"))?;
+    restore_files(backup, &files_with_boot(&config, &boot)?)?;
     output(Command::new("/usr/bin/networkctl").arg("reload"))?;
-    let (current, tag) = read_serve().context(
-        "host files restored; HTTPS recovery remains pending until Tailscale is available",
-    )?;
-    let restored = config.restore_routes(&before, &applied, &current)?;
-    if current != restored {
-        write_serve(&restored, &tag)?;
+    if before != applied && !backup.join("serve-unchanged").try_exists()? {
+        let (current, tag) = read_serve()
+            .context("host files restored; resume HTTPS recovery when Tailscale is available")?;
+        let restored = config.restore_routes(&before, &applied, &current)?;
+        if current != restored {
+            write_serve(&restored, &tag)?;
+        }
     }
     if backup.join("pending").exists() {
         fs::rename(backup.join("pending"), backup.join("restored"))?;
+        fs::File::open(backup)?.sync_all()?;
     }
     if Path::new(PENDING).exists() {
         fs::remove_file(PENDING)?;
+        sync_parent(Path::new(PENDING))?;
     }
     println!("Previous host configuration restored without changing unrelated HTTPS routes");
     Ok(())
 }
 
 pub(crate) fn recover() -> Result<()> {
+    root()?;
+    let _lock = host_lock()?;
     let backup = fs::read_to_string(PENDING).context("no pending host update was found")?;
-    restore(Path::new(backup.trim()))
+    restore_locked(Path::new(&backup))
 }
 
 pub(crate) fn check(path: &Path) -> Result<()> {
@@ -400,6 +507,14 @@ pub(crate) fn check(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn bootline(path: &Path) -> Result<()> {
+    let canonical = fs::canonicalize(path)?;
+    let _lock = if canonical == Path::new(BOOT)
+        || fs::canonicalize(BOOT).ok().as_ref() == Some(&canonical)
+    {
+        Some(host_lock()?)
+    } else {
+        None
+    };
     let current = fs::read_to_string(path)?;
     let updated = MemoryBootLine::parse(&current)?.0;
     if current != updated {
@@ -742,6 +857,34 @@ mod tests {
             assert!(read_serve_at(socket).is_err());
             Ok(())
         })?;
+        Ok(())
+    }
+
+    #[test]
+    fn restore_refuses_a_newer_file_before_touching_any_managed_path() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("pi-file-restore-{}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        let mut files = Vec::new();
+        for name in ["first", "second"] {
+            let path = dir.join(format!("{name}.live"));
+            super::replace(&path, b"installed", 0o600)?;
+            fs::write(dir.join(format!("{name}.absent")), "")?;
+            files.push(super::FileChange {
+                name,
+                path,
+                content: b"installed".to_vec(),
+                mode: 0o600,
+            });
+        }
+        super::replace(&files[1].path, b"newer", 0o600)?;
+        assert!(super::restore_files(&dir, &files).is_err());
+        assert_eq!(fs::read(&files[0].path)?, b"installed");
+        assert_eq!(fs::read(&files[1].path)?, b"newer");
+        super::replace(&files[1].path, b"installed", 0o600)?;
+        super::restore_files(&dir, &files)?;
+        super::restore_files(&dir, &files)?;
+        assert!(!files.iter().any(|file| file.path.exists()));
+        fs::remove_dir_all(dir)?;
         Ok(())
     }
 }
