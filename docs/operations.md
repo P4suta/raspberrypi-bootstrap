@@ -77,9 +77,11 @@ sudo raspberrypi-maintenance host-recover
 ```
 
 Restoration changes only managed files and routes changed by the recorded update.
-A later conflicting route change prevents route restoration.
+A later change to a managed file or route prevents restoration of the conflicting value.
 An interrupted update blocks another update until recovery completes.
-If Tailscale is unavailable, file restoration runs first and route recovery remains pending.
+If Tailscale is unavailable, the command restores the files first.
+When Tailscale returns, repeat `host-restore` with the same backup for an explicit restoration.
+Run `host-recover` to finish an interrupted update with a pending backup.
 Use the administrator account and local network path to recover access.
 
 The native [Tailscale client](https://github.com/tailscale/tailscale/blob/v1.104.5/client/local/serve.go) defines Serve concurrency behavior.
