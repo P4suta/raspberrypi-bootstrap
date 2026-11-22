@@ -1,0 +1,31 @@
+[Unit]
+Description=Private Excalidraw editor and saved diagrams
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+# renovate: version=latest
+Image=docker.io/excalidraw/excalidraw@sha256:f7ee194addd607bf831d2af0f0a34463dd4225e426cf35199ef0b12a803398e9
+ContainerName=excalidraw-replies
+Entrypoint=/usr/sbin/nginx
+Exec=-c /etc/excalidraw/nginx.conf -g "daemon off;"
+PublishPort=127.0.0.1:8097:8080
+Volume=%h/.config/excalidraw-replies/nginx.conf:/etc/excalidraw/nginx.conf:ro
+Volume=%h/.config/excalidraw-replies/reader.map:/etc/excalidraw/reader.map:ro
+Volume=%h/.local/share/excalidraw-replies/diagrams:/usr/share/nginx/html/diagrams:ro
+User=10001:10001
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,size=16m,mode=1777
+HealthCmd=/usr/sbin/nginx -t -c /etc/excalidraw/nginx.conf
+
+[Service]
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=180
+MemoryMax=128M
+TasksMax=64
+
+[Install]
+WantedBy=default.target

@@ -6,13 +6,30 @@ cloud_init_schema := "https://raw.githubusercontent.com/canonical/cloud-init/e68
 default:
     @just --list
 
+routing-config site networks destination:
+    cargo run --locked -- routing-config {{ quote(site) }} {{ quote(networks) }} {{ quote(destination) }}
+
+routing-deploy site networks environment:
+    just routing-config {{ quote(site) }} {{ quote(networks) }} {{ quote(environment) }}
+    just routing-apply {{ quote(environment) }}
+
+routing-apply environment:
+    sudo install -m 0600 {{ quote(environment) }} /etc/default/tailscale-subnet-router
+    sudo install -d -m 0755 /etc/tailscale-subnet-router
+    sudo install -m 0644 config/routing/forwarding.conf /etc/tailscale-subnet-router/forwarding.conf
+    sudo install -m 0644 config/routing/subnet-router.service /etc/systemd/system/tailscale-subnet-router.service
+    sudo systemctl daemon-reload
+    sudo systemd-analyze verify /etc/systemd/system/tailscale-subnet-router.service
+    sudo systemctl enable tailscale-subnet-router.service
+    sudo systemctl restart tailscale-subnet-router.service
+
 check:
     MISE_ENV=checks mise exec -- just check-source
 
 [private]
 check-source:
-    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
-    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml
+    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.routing.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.routing.toml mise.checks.toml verification/preflight/mise.toml
     mise exec taplo@0.10.0 -- taplo lint --no-schema repository.toml deny.toml .gitleaks.toml
     mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
     just check-cloud-init boot/tailscale-trixie-arm64.yaml
@@ -42,7 +59,7 @@ build-image generator config:
     {{ quote(generator) }} build -S {{ quote(justfile_directory() / "image") }} -B {{ quote(justfile_directory() / ".local/image-work") }} -c {{ quote(config) }}
 
 fmt:
-    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.routing.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
     cargo fmt --all
 
 plan:

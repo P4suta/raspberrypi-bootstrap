@@ -5,6 +5,7 @@ use std::{env, fs, path::Path};
 mod host;
 mod operations;
 mod publication;
+mod routing;
 
 pub(crate) struct OperationLock(fs::File);
 
@@ -50,13 +51,16 @@ fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
 }
 
 fn validate_container(document: &str) -> Result<()> {
+    const SHA256_HEX_LENGTH: usize = 64;
+    const PUBLISHED_PORT_FIELDS: usize = 3;
+    const LOOPBACK_HOST: &str = "127.0.0.1";
     let images = values(document, "Image")?;
     ensure!(images.len() == 1, "one pinned image is required");
     let (_, digest) = images[0]
         .split_once("@sha256:")
         .context("image digest is required")?;
     ensure!(
-        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        digest.len() == SHA256_HEX_LENGTH && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "invalid image digest"
     );
     let ports = values(document, "PublishPort")?;
@@ -64,7 +68,7 @@ fn validate_container(document: &str) -> Result<()> {
     for port in ports {
         let parts: Vec<_> = port.split(':').collect();
         ensure!(
-            parts.len() == 3 && parts[0] == "127.0.0.1",
+            parts.len() == PUBLISHED_PORT_FIELDS && parts[0] == LOOPBACK_HOST,
             "listener must bind only to loopback"
         );
         for part in &parts[1..] {
@@ -92,10 +96,11 @@ fn validate_container(document: &str) -> Result<()> {
 }
 
 fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
+    const NTFY_AUTH_DATABASE: &str = "/var/lib/ntfy/auth.db";
     validate_container(hub).context("hub")?;
     validate_container(ntfy).context("ntfy")?;
     ensure!(
-        server["auth-file"] == "/var/lib/ntfy/auth.db",
+        server["auth-file"] == NTFY_AUTH_DATABASE,
         "persistent authentication backend is required"
     );
     ensure!(
@@ -114,6 +119,9 @@ fn main() -> Result<()> {
     match arguments.as_slice() {
         [command, directory, address] if command == "humidity-prepare" => {
             operations::humidity::register(Path::new(directory), address)
+        }
+        [command, site, networks, destination] if command == "routing-config" => {
+            routing::write(site, networks, Path::new(destination))
         }
         [command] if command == "check" => check(Path::new(".")),
         [command] if command == "check-publication" => publication::check(Path::new(".")),
@@ -141,6 +149,7 @@ fn main() -> Result<()> {
         [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
             println!("{USAGE} | humidity-preflight IMAGE WORKSPACE");
+            println!("raspberrypi-maintenance routing-config SITE NETWORKS DESTINATION");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
@@ -180,6 +189,9 @@ fn check(root: &Path) -> Result<()> {
         host::MemoryBootLine::parse(&memory)?.0 == memory,
         "image kernel policy must enable memory accounting"
     );
+    validate_container(&fs::read_to_string(
+        root.join("apps/quadlet/excalidraw.container"),
+    )?)?;
     let path = root.join("apps/monitoring");
     validate_documents(
         &fs::read_to_string(path.join("beszel.container"))?,

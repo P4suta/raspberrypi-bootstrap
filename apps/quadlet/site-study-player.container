@@ -5,7 +5,7 @@ After=network-online.target
 
 [Container]
 # renovate: version=2.11.9
-Image=docker.io/library/caddy@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
+Image=docker.io/library/caddy@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
 ContainerName=site-study-player
 PublishPort=127.0.0.1:8080:8080
 Volume=%h/sites/study-player/current:/srv:ro
