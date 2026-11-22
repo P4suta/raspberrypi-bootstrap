@@ -1,0 +1,4 @@
+# GitHub hosts this image, but actionlint 1.7.12 lacks its label.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
