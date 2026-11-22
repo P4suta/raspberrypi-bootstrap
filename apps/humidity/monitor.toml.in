@@ -1,6 +1,6 @@
 label = "カメラ収納"
 address = "@METER_ADDRESS@"
-database = "/data/readings.sqlite"
+database = "/data/readings.redb"
 adapter = "hci0"
 listen = "0.0.0.0:8080"
 timezone = "Asia/Tokyo"
