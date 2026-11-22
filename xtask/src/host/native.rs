@@ -703,6 +703,7 @@ mod tests {
                     Err(error) => return Err(error.into()),
                 }
             };
+            connection.set_nonblocking(false)?;
             connection.set_read_timeout(Some(Duration::from_secs(5)))?;
             let mut bytes = Vec::new();
             let mut byte = [0_u8; 1];
@@ -735,8 +736,9 @@ mod tests {
             .join()
             .map_err(|_| anyhow::anyhow!("local API fixture panicked"))?;
         fs::remove_file(socket)?;
+        let request = request.context("local API fixture exchange failed")?;
         result?;
-        request
+        Ok(request)
     }
 
     #[test]
