@@ -59,6 +59,13 @@ Add a route to the private host configuration with an unused HTTPS port and targ
 Preview the route with `just host-plan`, apply it with `just host-apply`, and verify it with `just host-check`.
 Open the private HTTPS address on a phone connected to the tailnet.
 
+## Upgrade the receiver
+
+Stop `humidity-monitor.service` as `apps` before replacing the receiver image.
+Keep the data volume and make room for both database files.
+On startup the new receiver imports `/data/readings.sqlite` into `/data/readings.redb` and retains the original file.
+Open the dashboard and check the latest reception and a measurement from before the upgrade.
+
 ## Rehearse the deployment
 
 Complete the ARM64 monitoring rehearsal to prepare the isolated guest and its test subscriber.
@@ -71,9 +78,10 @@ mise x -- just humidity-preflight /private/path/receiver.tar
 ```
 
 The Rust fixture emits simulated advertisements on the guest system bus.
-It checks that the service runs as the app account and that the account owns the SQLite database.
+It seeds a SQLite history with a synthetic reading and starts the service as the app account.
+It checks that the account owns the imported redb history.
 It exercises high humidity and reception loss with shorter confirmation times and checks delivery through ntfy.
-It restarts the guest and verifies a new reception alongside the original SQLite history.
+After restarting the guest, it reads a new reception and the original sample through the dashboard.
 
 ## Check storage conditions
 
