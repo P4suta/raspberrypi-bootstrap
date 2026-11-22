@@ -64,7 +64,7 @@ Open the private HTTPS address on a phone connected to the tailnet.
 Stop `humidity-monitor.service` as `apps` before replacing the receiver image.
 Keep the data volume and make room for both database files.
 On startup the new receiver imports `/data/readings.sqlite` into `/data/readings.redb` and retains the original file.
-Open the dashboard and check the latest reception and a measurement from before the upgrade.
+Open the dashboard and check a fresh reception and a measurement from before the upgrade.
 
 ## Rehearse the deployment
 
