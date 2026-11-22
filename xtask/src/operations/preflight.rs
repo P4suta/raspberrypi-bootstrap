@@ -784,12 +784,7 @@ fn check() -> Result<()> {
     );
     notification_checks(Url::parse(NTFY)?, &fixture.secrets)?;
     super::hub_notification(&session, &fixture.secrets)?;
-    let received = client()?
-        .get(format!("{NTFY}home-status/json?poll=1&since=all"))
-        .basic_auth("iphone", Some(&fixture.secrets.reader_password))
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let received = topic_history(NTFY, &fixture.secrets.reader_password)?;
     ensure!(
         received.contains("notification from Beszel"),
         "hub notification did not reach the private subscriber"
@@ -802,15 +797,24 @@ fn check() -> Result<()> {
 
 fn messages() -> Result<Vec<Value>> {
     let fixture = fixture()?;
-    let text = client()?
-        .get(format!("{NTFY}home-status/json?poll=1&since=all"))
-        .basic_auth("iphone", Some(&fixture.secrets.reader_password))
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let text = topic_history(NTFY, &fixture.secrets.reader_password)?;
     text.lines()
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect()
+}
+
+fn topic_history(base: &str, password: &str) -> Result<String> {
+    let url = format!("{base}home-status/json?poll=1&since=all");
+    let http = client()?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = http.get(&url).basic_auth("iphone", Some(password)).send()?;
+        if response.status().is_server_error() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+        return Ok(response.error_for_status()?.text()?);
+    }
 }
 
 fn wait_notification(previous: &BTreeSet<String>, message: &str) -> Result<()> {
@@ -1313,6 +1317,32 @@ mod tests {
         let result = copy(&source, &destination);
         assert!(result.is_err());
         assert_eq!(fs::read(protected).unwrap(), b"preserved");
+    }
+
+    #[test]
+    fn history_survives_a_temporary_server_failure() -> anyhow::Result<()> {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let base = format!("http://{}/", listener.local_addr()?);
+        let worker = std::thread::spawn(move || -> std::io::Result<()> {
+            for (status, body) in [("500 Internal Server Error", ""), ("200 OK", "stored")] {
+                let (mut stream, _) = listener.accept()?;
+                for line in BufReader::new(&stream).lines() {
+                    if line?.is_empty() {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )?;
+            }
+            Ok(())
+        });
+        assert_eq!(super::topic_history(&base, "fixture")?, "stored");
+        worker.join().expect("fixture thread")?;
+        Ok(())
     }
 
     #[test]
