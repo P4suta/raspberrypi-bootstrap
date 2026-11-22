@@ -18,7 +18,7 @@ Installing `uidmap` alone doesn't set up those ranges.
 The [image configuration](../image/config/arm64-private-access.yaml) uses Debian Trixie and Raspberry Pi packages.
 It installs Tailscale, native development packages, mise, Rust, and just before first boot.
 The build checks the recovery public key, mise checksum, enrollment service definition, and user-session dependency.
-The image includes native root-partition growth support and firmware settings that turn off onboard Wi-Fi and Bluetooth.
+The image includes native root-partition growth support and uses wired networking with onboard Bluetooth.
 The administrator account uses passwordless sudo and SSH public key authentication.
 Keep the username, hostname, and recovery public key path in a private configuration outside version control.
 Replace `USER`, `HOST`, and the public key path in the example.
@@ -139,11 +139,12 @@ mise --version
 
 Review `mise.toml`, the selected platform profile, and the justfile before trusting the configuration.
 The platform profile declares Rust's native host.
-The generated image already masks unused radio services.
-For a stock image, create the native masks before previewing the shared service declarations.
+The generated image masks the Wi-Fi service.
+On an existing installation, remove the previous Bluetooth masks before applying the shared declarations.
 
 ```sh
-sudo systemctl mask --now iwd.service bluetooth.service hciuart.service
+sudo systemctl mask --now iwd.service
+sudo systemctl unmask bluetooth.service hciuart.service
 ```
 
 ```sh
@@ -154,7 +155,7 @@ MISE_ENV=arm64 mise exec just@1.59.0 -- just apply
 ```
 
 The apply command manages native packages, system files, services, and pinned tools through [mise bootstrap](https://mise.jdx.dev/bootstrap.html).
-It enables SSH and Tailscale and keeps unused radio services masked.
+It enables SSH, Tailscale and BlueZ and keeps Wi-Fi off.
 Native packages follow the device's operating system repositories, while Rust and just have exact version pins.
 Each platform profile declares the [official Tailscale package repository](https://pkgs.tailscale.com/stable/) and its signing key fingerprint.
 Run the preview again after applying to inspect the resulting state.

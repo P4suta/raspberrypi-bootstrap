@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
     process::Command,
     thread,
@@ -21,11 +21,16 @@ const EMAIL: &str = "preflight@example.invalid";
 const SYSTEM: &str = "Preflight Linux";
 const HUB: &str = "http://127.0.0.1:8090/";
 const NTFY: &str = "http://127.0.0.1:8081/";
-const MACHINE: &str = "monitoring-preflight";
+const MACHINE: &str = "pi-operations-preflight";
+pub(crate) mod humidity;
 const MISE_SHA256: &str = "ae1151a87d70146119f68f7378001a12f09d2a38853087ed6139b7527a55f148";
 const AGENT_SHA256: &str = "bd6eed7a98493e0900c3398177552a53809546733ea69a8ad200e2cf4c7b677c";
 
 fn validate_machine(source: &Path) -> Result<()> {
+    validate_workspace(&source.join(".local/preflight"))
+}
+
+fn validate_workspace(workspace: &Path) -> Result<()> {
     let output = Command::new("orb")
         .args(["info", MACHINE, "--format", "json"])
         .output()?;
@@ -36,7 +41,7 @@ fn validate_machine(source: &Path) -> Result<()> {
     let info: Value = serde_json::from_slice(&output.stdout)?;
     let record = &info["record"];
     let config = &record["config"];
-    let mount = fs::canonicalize(source.join(".local/preflight"))?;
+    let mount = fs::canonicalize(workspace)?;
     ensure!(
         record["image"]["distro"] == "debian"
             && record["image"]["version"] == "trixie"
@@ -49,8 +54,18 @@ fn validate_machine(source: &Path) -> Result<()> {
             && config["forward_ssh_agent"] == false,
         "rehearsal must isolate the home, private network, and SSH agent"
     );
+    let mounts = config["mounts"]
+        .as_array()
+        .context("rehearsal mounts are missing")?;
     ensure!(
-        config["mounts"] == json!([{"source":mount,"destination":"/workspace"}]),
+        mounts.len() == 1,
+        "rehearsal must expose only its disposable workspace"
+    );
+    let actual = mounts[0]["source"]
+        .as_str()
+        .context("rehearsal mount source is missing")?;
+    ensure!(
+        fs::canonicalize(actual)? == mount && mounts[0]["destination"] == "/workspace",
         "rehearsal must expose only its disposable workspace"
     );
     ensure!(
@@ -58,6 +73,24 @@ fn validate_machine(source: &Path) -> Result<()> {
             && config["memory_limit_mib"] == 4096
             && config["disk_limit_bytes"] == 12_884_901_888_u64,
         "rehearsal resource limits changed"
+    );
+    Ok(())
+}
+
+fn verify_tool(path: &Path, expected: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0,
+        "rehearsal tool must be a nonempty regular executable"
+    );
+    let output = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()?;
+    ensure!(
+        output.status.success()
+            && String::from_utf8(output.stdout)?.split_whitespace().next() == Some(expected),
+        "rehearsal tool differs from its pinned release"
     );
     Ok(())
 }
@@ -93,6 +126,7 @@ pub(super) fn initialize(mise: &Path, agent: &Path) -> Result<()> {
             "rehearsal binary does not match its pinned release"
         );
         copy(binary, &tools.join(name))?;
+        verify_tool(&tools.join(name), expected)?;
         fs::set_permissions(tools.join(name), fs::Permissions::from_mode(0o755))?;
     }
     if !exists.status.success() {
@@ -131,10 +165,17 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
         "rehearsal sources must not contain symlinks"
     );
     match fs::symlink_metadata(destination) {
-        Ok(metadata) => ensure!(
-            !metadata.file_type().is_symlink(),
-            "rehearsal destinations must not contain symlinks"
-        ),
+        Ok(destination_metadata) => {
+            ensure!(
+                !destination_metadata.file_type().is_symlink(),
+                "rehearsal destinations must not contain symlinks"
+            );
+            if metadata.dev() == destination_metadata.dev()
+                && metadata.ino() == destination_metadata.ino()
+            {
+                return Ok(());
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
@@ -167,14 +208,7 @@ fn orb(arguments: &[&str]) -> Result<()> {
     command(
         "orb",
         &[
-            &[
-                "-m",
-                "monitoring-preflight",
-                "-u",
-                "root",
-                "-w",
-                "/workspace/source",
-            ],
+            &["-m", MACHINE, "-u", "root", "-w", "/workspace/source"],
             arguments,
         ]
         .concat(),
@@ -185,6 +219,11 @@ pub(super) fn local() -> Result<()> {
     let source = std::env::current_dir()?;
     crate::check(&source)?;
     validate_machine(&source)?;
+    verify_tool(&source.join(".local/preflight/tools/mise"), MISE_SHA256)?;
+    verify_tool(
+        &source.join(".local/preflight/tools/beszel-agent"),
+        AGENT_SHA256,
+    )?;
     command("orb", &["stop", MACHINE])?;
     let staged = source.join(".local/preflight/source");
     destination_directory(&staged)?;
@@ -224,6 +263,7 @@ pub(super) fn local() -> Result<()> {
         "--only",
         "accounts,packages,files,services",
     ])?;
+    orb(&["systemctl", "start", "network-online.target"])?;
     orb(&["/workspace/tools/mise", "install"])?;
     orb(&[
         "/workspace/tools/mise",
@@ -237,7 +277,7 @@ pub(super) fn local() -> Result<()> {
     let rejected = Command::new("orb")
         .args([
             "-m",
-            "monitoring-preflight",
+            MACHINE,
             "-u",
             "root",
             "-w",
@@ -264,6 +304,7 @@ pub(super) fn local() -> Result<()> {
     for action in [
         "prepare",
         "seed",
+        "operations",
         "pagination",
         "check",
         "reader-password",
@@ -274,7 +315,7 @@ pub(super) fn local() -> Result<()> {
     ] {
         orb(&["target/debug/raspberrypi-maintenance", "fixture", action])?;
     }
-    command("orb", &["restart", "monitoring-preflight"])?;
+    command("orb", &["restart", MACHINE])?;
     orb(&["target/debug/raspberrypi-maintenance", "fixture", "resumed"])?;
     println!(
         "Isolated ARM64 deployment rehearsal passed, including missing dependencies, alert delivery, backup restoration, and reboot persistence"
@@ -407,6 +448,11 @@ fn prepare() -> Result<()> {
     ensure!(uid.status.success(), "fixture app account is missing");
     let manager = format!("user@{}.service", String::from_utf8(uid.stdout)?.trim());
     command("systemctl", &["start", &manager])?;
+    if Path::new("/etc/systemd/system/monitoring-agent.service").exists() {
+        crate::host::agent_migrate(
+            &Path::new(ROOT).join(format!("initial-agent-{}", random_text(16)?)),
+        )?;
+    }
     app(&["systemctl", "--user", "daemon-reload"])?;
     app(&[
         "systemctl",
@@ -506,13 +552,139 @@ fn seed() -> Result<()> {
             "/var/lib/apps/.config/monitoring/pi-agent.env",
         ],
     )?;
+    app(&["systemctl", "--user", "daemon-reload"])?;
+    app(&[
+        "systemctl",
+        "--user",
+        "enable",
+        "--now",
+        "monitoring-agent.service",
+    ])?;
+    wait_up(&session)?;
+    println!("Native ARM64 agent connected to the isolated hub");
+    Ok(())
+}
+
+fn operations() -> Result<()> {
+    ensure!(
+        Path::new("/usr/bin/sudo").is_file(),
+        "operator denial needs the native sudo executable"
+    );
+    let denied = app_command(&["sudo", "-n", "true"])?.output()?;
+    ensure!(
+        !denied.status.success(),
+        "app operations must not gain administrator access"
+    );
+    let login = Command::new("runuser")
+        .args(["--login", "apps", "--command", "id -u"])
+        .output()?;
+    ensure!(
+        login.status.success()
+            && String::from_utf8(login.stdout)?.trim() == app_output(&["id", "-u"])?,
+        "app account must support an unprivileged login"
+    );
+    let user_unit = Path::new("/var/lib/apps/.config/systemd/user/monitoring-agent.service");
+    let valid = fs::read_to_string(user_unit)?;
+    app(&["systemctl", "--user", "stop", "monitoring-agent.service"])?;
+    let legacy = valid
+        .replace("PrivateUsers=true", "User=apps\nGroup=apps")
+        .replace("WantedBy=default.target", "WantedBy=multi-user.target");
+    fs::write("/etc/systemd/system/monitoring-agent.service", legacy)?;
     command("systemctl", &["daemon-reload"])?;
     command(
         "systemctl",
         &["enable", "--now", "monitoring-agent.service"],
     )?;
-    wait_up(&session)?;
-    println!("Native ARM64 agent connected to the isolated hub");
+    fs::write(
+        user_unit,
+        "[Service]\nType=oneshot\nExecStart=/usr/bin/false\n[Install]\nWantedBy=default.target\n",
+    )?;
+    app(&["systemctl", "--user", "daemon-reload"])?;
+    let operation_root = Path::new(ROOT).join(format!("operations-{}", random_text(16)?));
+    fs::create_dir(&operation_root)?;
+    let failed_backup = operation_root.join("agent-failed-migration");
+    ensure!(
+        crate::host::agent_migrate(&failed_backup).is_err(),
+        "invalid user unit must refuse migration"
+    );
+    ensure!(
+        Command::new("systemctl")
+            .args(["is-active", "--quiet", "monitoring-agent.service"])
+            .status()?
+            .success(),
+        "failed migration must preserve the working system agent"
+    );
+    fs::write(user_unit, &valid)?;
+    app(&["systemctl", "--user", "daemon-reload"])?;
+    app(&["systemctl", "--user", "reset-failed"])?;
+    let backup = operation_root.join("agent-system-backup");
+    crate::host::agent_migrate(&backup)?;
+    app(&[
+        "systemctl",
+        "--user",
+        "is-active",
+        "--quiet",
+        "monitoring-agent.service",
+    ])?;
+    let manager = format!("user@{}.service", app_output(&["id", "-u"])?);
+    command("systemctl", &["stop", &manager])?;
+    let recovery = crate::host::agent_restore(&backup);
+    command("systemctl", &["start", &manager])?;
+    recovery?;
+    command(
+        "systemctl",
+        &["is-active", "--quiet", "monitoring-agent.service"],
+    )?;
+    crate::host::agent_migrate(&operation_root.join("agent-restored-migration"))?;
+    for (unit, limit) in [
+        ("monitoring-beszel.service", "536870912"),
+        ("monitoring-ntfy.service", "268435456"),
+        ("monitoring-agent.service", "134217728"),
+    ] {
+        let group = app_output(&[
+            "systemctl",
+            "--user",
+            "show",
+            "--property=ControlGroup",
+            "--value",
+            unit,
+        ])?;
+        ensure!(
+            group.starts_with("/user.slice/"),
+            "app service must remain in the user hierarchy"
+        );
+        ensure!(
+            fs::read_to_string(format!("/sys/fs/cgroup{group}/memory.max"))?.trim() == limit,
+            "kernel memory limit differs from its declared value"
+        );
+    }
+    wait_up(&session()?)?;
+    command(
+        "install",
+        &[
+            "-m",
+            "755",
+            "/workspace/source/target/debug/raspberrypi-maintenance",
+            "/usr/local/bin/raspberrypi-maintenance",
+        ],
+    )?;
+    app(&["/usr/local/bin/raspberrypi-maintenance", "apps-check"])?;
+    app(&["/usr/local/bin/raspberrypi-maintenance", "monitoring-check"])?;
+    app(&[
+        "/usr/local/bin/raspberrypi-maintenance",
+        "apps-restart",
+        "agent",
+    ])?;
+    ensure!(
+        !Command::new("/usr/local/bin/raspberrypi-maintenance")
+            .arg("apps-check")
+            .status()?
+            .success(),
+        "administrator context must not impersonate a daily operation check"
+    );
+    println!(
+        "Sudo denial, unprivileged login, agent migration recovery, and kernel memory limits passed"
+    );
     Ok(())
 }
 
@@ -536,10 +708,15 @@ fn agent_ready(systems: &[Value], statistics: &[Value], previous: &[String]) -> 
 fn wait_up_after(session: &Session, previous: &[String]) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
-        if Command::new("systemctl")
-            .args(["is-active", "--quiet", "monitoring-agent.service"])
-            .status()?
-            .success()
+        if app_command(&[
+            "systemctl",
+            "--user",
+            "is-active",
+            "--quiet",
+            "monitoring-agent.service",
+        ])?
+        .status()?
+        .success()
             && agent_ready(
                 &session.records("systems")?,
                 &session.records("system_stats")?,
@@ -596,26 +773,23 @@ fn check() -> Result<()> {
             "fixture container identity must remain unprivileged"
         );
     }
-    let user = Command::new("systemctl")
-        .args([
-            "show",
-            "--property=User",
-            "--value",
-            "monitoring-agent.service",
-        ])
-        .output()?;
+    let pid = app_output(&[
+        "systemctl",
+        "--user",
+        "show",
+        "--property=MainPID",
+        "--value",
+        "monitoring-agent.service",
+    ])?;
+    let uid = app_output(&["id", "-u"])?;
+    use std::os::unix::fs::MetadataExt;
     ensure!(
-        user.status.success() && String::from_utf8(user.stdout)?.trim() == "apps",
+        fs::metadata(format!("/proc/{pid}"))?.uid().to_string() == uid,
         "native agent must run as apps"
     );
     notification_checks(Url::parse(NTFY)?, &fixture.secrets)?;
     super::hub_notification(&session, &fixture.secrets)?;
-    let received = client()?
-        .get(format!("{NTFY}home-status/json?poll=1&since=all"))
-        .basic_auth("iphone", Some(&fixture.secrets.reader_password))
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let received = topic_history(NTFY, &fixture.secrets.reader_password)?;
     ensure!(
         received.contains("notification from Beszel"),
         "hub notification did not reach the private subscriber"
@@ -628,15 +802,24 @@ fn check() -> Result<()> {
 
 fn messages() -> Result<Vec<Value>> {
     let fixture = fixture()?;
-    let text = client()?
-        .get(format!("{NTFY}home-status/json?poll=1&since=all"))
-        .basic_auth("iphone", Some(&fixture.secrets.reader_password))
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let text = topic_history(NTFY, &fixture.secrets.reader_password)?;
     text.lines()
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect()
+}
+
+fn topic_history(base: &str, password: &str) -> Result<String> {
+    let url = format!("{base}home-status/json?poll=1&since=all");
+    let http = client()?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = http.get(&url).basic_auth("iphone", Some(password)).send()?;
+        if response.status().is_server_error() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+        return Ok(response.error_for_status()?.text()?);
+    }
 }
 
 fn wait_notification(previous: &BTreeSet<String>, message: &str) -> Result<()> {
@@ -680,9 +863,9 @@ fn alerts() -> Result<()> {
     println!(
         "Local alert test: stopping the disposable agent and waiting for the one-minute threshold"
     );
-    command("systemctl", &["stop", "monitoring-agent.service"])?;
+    app(&["systemctl", "--user", "stop", "monitoring-agent.service"])?;
     let down = wait_notification(&previous, "Connection to Preflight Linux is down");
-    let restart = command("systemctl", &["start", "monitoring-agent.service"]);
+    let restart = app(&["systemctl", "--user", "start", "monitoring-agent.service"]);
     down?;
     restart?;
     wait_up(&session)?;
@@ -1035,7 +1218,7 @@ fn restore() -> Result<()> {
     let initial = session()?;
     wait_up(&initial)?;
     let previous = snapshot(&initial)?;
-    command("systemctl", &["stop", "monitoring-agent.service"])?;
+    app(&["systemctl", "--user", "stop", "monitoring-agent.service"])?;
     app(&["systemctl", "--user", "stop", "monitoring-beszel.service"])?;
     let mount = app_output(&[
         "podman",
@@ -1068,7 +1251,7 @@ fn restore() -> Result<()> {
         "/var/lib/apps/backups/preflight-beszel.tar",
     ])?;
     app(&["systemctl", "--user", "start", "monitoring-beszel.service"])?;
-    command("systemctl", &["start", "monitoring-agent.service"])?;
+    app(&["systemctl", "--user", "start", "monitoring-agent.service"])?;
     let restored = session()?;
     wait_up_after(&restored, &previous.statistics)?;
     let actual = snapshot(&restored)?;
@@ -1092,7 +1275,9 @@ pub(super) fn run(action: &str) -> Result<()> {
             command("/usr/lib/podman/aardvark-dns", &["--version"])
         }
         "prepare" => prepare(),
+        "humidity" => humidity::install(),
         "seed" => seed(),
+        "operations" => operations(),
         "check" => check(),
         "alerts" => alerts(),
         "retirement" => retirement(),
@@ -1108,6 +1293,19 @@ pub(super) fn run(action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preserves_a_staged_tool_when_initialization_reuses_its_path() -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("staged-tool-{}", super::random_text(16)?));
+        std::fs::create_dir(&root)?;
+        let path = root.join("tool");
+        std::fs::write(&path, b"verified-tool-bytes")?;
+        let result = super::copy(&path, &path);
+        let bytes = std::fs::read(&path)?;
+        std::fs::remove_dir_all(&root)?;
+        result?;
+        assert_eq!(bytes, b"verified-tool-bytes");
+        Ok(())
+    }
     use super::super::tests::Directory;
     use super::{SYSTEM, agent_ready, copy};
     use serde_json::json;
@@ -1125,6 +1323,32 @@ mod tests {
         let result = copy(&source, &destination);
         assert!(result.is_err());
         assert_eq!(fs::read(protected).unwrap(), b"preserved");
+    }
+
+    #[test]
+    fn history_survives_a_temporary_server_failure() -> anyhow::Result<()> {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let base = format!("http://{}/", listener.local_addr()?);
+        let worker = std::thread::spawn(move || -> std::io::Result<()> {
+            for (status, body) in [("500 Internal Server Error", ""), ("200 OK", "stored")] {
+                let (mut stream, _) = listener.accept()?;
+                for line in BufReader::new(&stream).lines() {
+                    if line?.is_empty() {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )?;
+            }
+            Ok(())
+        });
+        assert_eq!(super::topic_history(&base, "fixture")?, "stored");
+        worker.join().expect("fixture thread")?;
+        Ok(())
     }
 
     #[test]

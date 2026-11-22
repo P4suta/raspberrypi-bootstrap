@@ -11,8 +11,8 @@ check:
 
 [private]
 check-source:
-    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
-    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml
+    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml
     mise exec taplo@0.10.0 -- taplo lint --no-schema repository.toml deny.toml .gitleaks.toml
     mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
     just check-cloud-init boot/tailscale-trixie-arm64.yaml
@@ -36,7 +36,7 @@ build-image generator config:
     {{ quote(generator) }} build -S {{ quote(justfile_directory() / "image") }} -B {{ quote(justfile_directory() / ".local/image-work") }} -c {{ quote(config) }}
 
 fmt:
-    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
     cargo fmt --all
 
 plan:
@@ -61,8 +61,31 @@ apps-apply:
     sudo --user apps env XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemctl --user daemon-reload
 
 apps-check:
-    sudo systemctl is-active "user@$(id -u apps).service"
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" podman unshare /usr/bin/true
+    /usr/local/bin/raspberrypi-maintenance apps-check
+
+apps-restart service:
+    /usr/local/bin/raspberrypi-maintenance apps-restart {{ quote(service) }}
+
+host-plan config:
+    sudo /usr/local/bin/raspberrypi-maintenance host-plan {{ quote(config) }}
+
+host-apply config backup:
+    sudo /usr/local/bin/raspberrypi-maintenance host-apply {{ quote(config) }} {{ quote(backup) }}
+
+host-check config:
+    sudo /usr/local/bin/raspberrypi-maintenance host-check {{ quote(config) }}
+
+host-restore backup:
+    sudo /usr/local/bin/raspberrypi-maintenance host-restore {{ quote(backup) }}
+
+host-recover:
+    sudo /usr/local/bin/raspberrypi-maintenance host-recover
+
+source-stage destination:
+    MISE_ENV=checks mise x -- cargo run --locked -- source-stage . {{ quote(destination) }}
+
+source-verify directory:
+    cargo run --locked -- source-verify {{ quote(directory) }}
 
 sites-plan:
     MISE_ENV=arm64,sites mise bootstrap --dry-run --only files
@@ -95,10 +118,22 @@ monitoring-preflight:
 monitoring-preflight-init mise agent:
     cargo run --locked -- preflight-init {{ quote(mise) }} {{ quote(agent) }}
 
-monitoring-apply:
+monitoring-apply backup:
     MISE_ENV=arm64,apps,monitoring mise bootstrap --yes --only accounts,packages,files,services
+    sudo /usr/local/bin/raspberrypi-maintenance agent-migrate {{ quote(backup) }}
 
 monitoring-check:
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemd-analyze --user verify --man=no --generators=true monitoring-beszel.service monitoring-ntfy.service
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemctl --user is-active monitoring-beszel.service monitoring-ntfy.service
-    systemctl is-active monitoring-agent.service
+    /usr/local/bin/raspberrypi-maintenance monitoring-check
+
+humidity-plan:
+    MISE_ENV=arm64,humidity mise bootstrap --dry-run --only files
+
+humidity-apply:
+    MISE_ENV=arm64,humidity mise bootstrap --yes --only files
+    sudo systemctl reload dbus.service
+
+humidity-prepare directory address:
+    cargo run --locked -- humidity-prepare {{ quote(directory) }} {{ quote(address) }}
+
+humidity-preflight image workspace=".local/preflight":
+    cargo run --locked -- humidity-preflight {{ quote(image) }} {{ quote(workspace) }}

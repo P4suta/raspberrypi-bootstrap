@@ -1,0 +1,19 @@
+label = "カメラ収納"
+address = "@METER_ADDRESS@"
+database = "/data/readings.redb"
+adapter = "hci0"
+listen = "0.0.0.0:8080"
+timezone = "Asia/Tokyo"
+retention_days = 365
+reference = [40, 50]
+dry_below = 35
+
+[policy]
+high_above = 55
+high_seconds = 1800
+recovery_seconds = 300
+loss_seconds = 600
+
+[ntfy]
+url = "http://ntfy:8080/home-status"
+token_file = "/run/secrets/ntfy-token"

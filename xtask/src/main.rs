@@ -2,10 +2,29 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use std::{env, fs, path::Path};
 
+mod host;
 mod operations;
 mod publication;
 
-const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG";
+pub(crate) struct OperationLock(fs::File);
+
+impl OperationLock {
+    pub(crate) fn acquire(file: fs::File) -> Result<Self> {
+        file.try_lock()
+            .context("another operation holds the lock")?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for OperationLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            eprintln!("Could not release operation lock: {error}");
+        }
+    }
+}
+
+const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -93,16 +112,39 @@ fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
 fn main() -> Result<()> {
     let arguments: Vec<_> = env::args().skip(1).collect();
     match arguments.as_slice() {
+        [command, directory, address] if command == "humidity-prepare" => {
+            operations::humidity::register(Path::new(directory), address)
+        }
         [command] if command == "check" => check(Path::new(".")),
         [command] if command == "check-publication" => publication::check(Path::new(".")),
         [command] if command == "check-dependencies" => publication::dependencies(Path::new(".")),
         [command] if command == "preflight" => operations::local_preflight(),
+        [command, config] if command == "host-plan" => host::plan(Path::new(config)),
+        [command, config] if command == "host-check" => host::check(Path::new(config)),
+        [command, config, backup] if command == "host-apply" => {
+            host::apply(Path::new(config), Path::new(backup))
+        }
+        [command, backup] if command == "host-restore" => host::restore(Path::new(backup)),
+        [command] if command == "host-recover" => host::recover(),
+        [command, path] if command == "memory-bootline" => host::bootline(Path::new(path)),
+        [command, source, destination] if command == "source-stage" => {
+            host::stage(Path::new(source), Path::new(destination))
+        }
+        [command, source] if command == "source-verify" => host::verify(Path::new(source)),
+        [command, backup] if command == "agent-migrate" => host::agent_migrate(Path::new(backup)),
+        [command, backup] if command == "agent-restore" => host::agent_restore(Path::new(backup)),
+        [command] if command == "apps-check" => host::apps_check(),
+        [command] if command == "monitoring-check" => host::monitoring_check(),
+        [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
-            println!("{USAGE}");
+            println!("{USAGE} | humidity-preflight IMAGE WORKSPACE");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
             operations::initialize_preflight(Path::new(mise), Path::new(agent))
+        }
+        [command, image, workspace] if command == "humidity-preflight" => {
+            operations::preflight::humidity::local(Path::new(image), Path::new(workspace))
         }
         [command, config, id] if command == "cached" => operations::cached(Path::new(config), id),
         [command, config] if command == "prepare" => operations::prepare(Path::new(config)),
@@ -128,6 +170,13 @@ fn main() -> Result<()> {
 }
 
 fn check(root: &Path) -> Result<()> {
+    let memory = fs::read_to_string(root.join(
+        "image/layer/tailscale-development.d/for/linux-base/cmdline.d/90-memory-accounting",
+    ))?;
+    ensure!(
+        host::MemoryBootLine::parse(&memory)?.0 == memory,
+        "image kernel policy must enable memory accounting"
+    );
     let path = root.join("apps/monitoring");
     validate_documents(
         &fs::read_to_string(path.join("beszel.container"))?,

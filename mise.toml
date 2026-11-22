@@ -5,6 +5,8 @@ rust = { version = "1.99.1", components = ["clippy", "rustfmt"] }
 just = "1.59.0"
 
 [bootstrap.packages]
+"apt:bluez" = "latest"
+"apt:bluez-firmware" = "latest"
 "apt:build-essential" = "latest"
 "apt:ca-certificates" = "latest"
 "apt:cloud-initramfs-growroot" = "latest"
@@ -52,14 +54,9 @@ enabled = false
 masked = true
 
 [bootstrap.services.bluetooth]
-state = "stopped"
-enabled = false
-masked = true
-
-[bootstrap.services.hciuart]
-state = "stopped"
-enabled = false
-masked = true
+state = "running"
+enabled = true
+masked = false
 
 [bootstrap.services.ssh]
 state = "running"

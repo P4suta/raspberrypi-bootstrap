@@ -11,10 +11,10 @@ use std::{
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 
-struct SourcePath(PathBuf);
+pub(super) struct SourcePath(pub(super) PathBuf);
 
 impl SourcePath {
-    fn new(path: &Path) -> Result<Self> {
+    pub(super) fn new(path: &Path) -> Result<Self> {
         ensure!(
             !path.as_os_str().is_empty()
                 && path
@@ -75,8 +75,8 @@ impl SourcePath {
             .to_ascii_lowercase();
         ensure!(
             ![
-                "env", "pem", "key", "pub", "p12", "sqlite", "db", "img", "dmg", "iso", "spk",
-                "tar", "zip", "gz", "zst"
+                "env", "pem", "key", "pub", "p12", "sqlite", "redb", "db", "img", "dmg", "iso",
+                "spk", "tar", "zip", "gz", "zst"
             ]
             .contains(&extension.as_str()),
             "private keys, databases, and deployment artifacts cannot be published"
@@ -125,6 +125,10 @@ fn scanner(root: &Path, source: &Path) -> Command {
         .arg(root.join(".gitleaks.toml"))
         .arg(source);
     command
+}
+
+pub(super) fn scan_snapshot(root: &Path, source: &Path) -> Result<()> {
+    checked(&mut scanner(root, source), "scan exact source snapshot")
 }
 
 #[derive(Deserialize)]
@@ -297,6 +301,7 @@ mod tests {
             "config/.env.local",
             "boot/recovery.pem",
             "card.img.zst",
+            "history/readings.redb",
             "settings/credentials.txt",
             "mise.local.toml",
             "../credentials.txt",

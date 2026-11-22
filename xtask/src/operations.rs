@@ -11,7 +11,8 @@ use std::{
     time::Duration,
 };
 
-mod preflight;
+pub(crate) mod humidity;
+pub(crate) mod preflight;
 
 pub(super) fn fixture(action: &str) -> Result<()> {
     preflight::run(action)
@@ -167,7 +168,7 @@ enum RotationAccess {
 }
 
 struct CredentialLock {
-    _file: fs::File,
+    _file: crate::OperationLock,
     config: PathBuf,
 }
 
@@ -188,8 +189,8 @@ fn credential_lock(config: &Path, access: RotationAccess) -> Result<CredentialLo
         .write(true)
         .mode(0o600)
         .open(&path)?;
-    lock.try_lock()
-        .context("another credential operation is active")?;
+    let lock =
+        crate::OperationLock::acquire(lock).context("another credential operation is active")?;
     let pending = match fs::symlink_metadata(root.join("reader-password-backup")) {
         Ok(metadata) => {
             ensure!(
@@ -708,6 +709,7 @@ pub(super) fn prepare(path: &Path) -> Result<()> {
         "NTFY_BASE_URL={}\nNTFY_AUTH_USERS=beszel:{publisher_hash}:user,iphone:{reader_hash}:user\nNTFY_AUTH_ACCESS=beszel:home-status:wo,iphone:home-status:ro\nNTFY_AUTH_TOKENS=beszel:{}:Beszel\n",
         inputs.ntfy_url, secret.publisher_token
     );
+    let ntfy = humidity::preserve_publisher(parent_directory(path)?, ntfy)?;
     private_write(&runtime.join("ntfy.env"), ntfy.as_bytes())?;
     let public_key = fs::read_to_string(&inputs.public_key_file)?
         .trim()
@@ -1172,6 +1174,18 @@ mod tests {
         assert!(credential_lock(&path, RotationAccess::Stable).is_err());
         drop(lock);
         assert!(credential_lock(&path, RotationAccess::Stable).is_ok());
+    }
+
+    #[test]
+    fn releases_the_operation_lock_while_a_duplicated_descriptor_exists() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Windows", "Linux", "Pi"]));
+        let lock = credential_lock(&path, RotationAccess::Stable).unwrap();
+        let descriptor = lock._file.0.try_clone().unwrap();
+        drop(lock);
+        let reacquired = credential_lock(&path, RotationAccess::Stable);
+        drop(descriptor);
+        assert!(reacquired.is_ok(), "{:#?}", reacquired.err());
     }
 
     #[test]
