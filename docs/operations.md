@@ -71,6 +71,42 @@ The image includes the same argument through the generator's native `for/linux-b
 After reboot, verify finite limits in the app service cgroups and observe fresh metrics.
 The host check verifies machine identity, declared file bytes, HTTPS routes, the memory controller, and the actual source address used to reach the management peer.
 
+## Personal service portal
+
+Add a `label` to each route you want to open from one bookmark in your private host configuration.
+The portal lists named routes in configuration order and builds each link from `tailnet_name` and the HTTPS `port`.
+Keep proxy targets, credentials, and the generated page in private storage.
+The [example configuration](../verification/examples/host.json) includes three named services and an unlisted route.
+
+Preview the example on the administration machine or pass the path to your private configuration.
+
+```sh
+mise x -- just portal-preview
+mise x -- just portal-preview /private/path/host.json
+```
+
+Open `.local/service-portal.html` in a browser.
+The example uses synthetic addresses.
+After installing the updated maintenance helper, use the normal `host-plan`, `host-apply`, and `host-check` commands.
+The first named route enables the generated file at `/var/lib/raspberrypi-maintenance/service-portal.html`.
+Host updates replace it atomically and include it in the host backup.
+Removing the last label clears the links from an existing portal.
+
+Choose an unused HTTPS port outside the family site and service ports.
+Check `tailscale serve status` and the [effective access rules](https://tailscale.com/docs/features/access-control/grants) before enabling the portal.
+Grant your account access to the chosen port and verify that the policy denies access to other accounts.
+Each destination still requires its own access.
+For example, after reserving port `15443`, share the single HTML file with [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve#use-https-and-http-servers).
+
+```sh
+sudo tailscale serve --bg --https=15443 /var/lib/raspberrypi-maintenance/service-portal.html
+```
+
+Bookmark the HTTPS address printed by Serve and open a named service from an authorized device.
+To retire the portal, run `sudo tailscale serve --https=15443 off` with the port you selected.
+
+## Restore a host update
+
 ```sh
 sudo raspberrypi-maintenance host-restore /private/path/host-backup
 sudo raspberrypi-maintenance host-recover
