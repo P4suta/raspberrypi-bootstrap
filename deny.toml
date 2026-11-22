@@ -14,6 +14,9 @@ allow = [
   "Unicode-3.0",
 ]
 
+# The WebAssembly verifier uses this data package for Mozilla's root certificates.
+exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

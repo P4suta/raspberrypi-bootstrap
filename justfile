@@ -31,7 +31,7 @@ check-source:
     mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.routing.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
     mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.routing.toml mise.checks.toml verification/preflight/mise.toml
     mise exec taplo@0.10.0 -- taplo lint --no-schema repository.toml deny.toml .gitleaks.toml
-    mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
+    MISE_ENV=checks mise exec -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
     just check-cloud-init boot/tailscale-trixie-arm64.yaml
     just check-image-source
     cargo fmt --all -- --check
@@ -44,7 +44,7 @@ check-source:
     cargo run --locked -- check-dependencies
 
 check-cloud-init config:
-    mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile '{{ cloud_init_schema }}' --default-filetype yaml '{{ config }}'
+    MISE_ENV=checks mise exec -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile '{{ cloud_init_schema }}' --default-filetype yaml '{{ config }}'
 
 check-image-source:
     mise exec yq@4.54.3 -- yq -r '.write_files[0].content | trim' boot/tailscale-trixie-arm64.yaml | cmp image/mise-tailscale.sources -
