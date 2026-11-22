@@ -2,7 +2,8 @@
 
 Beszel collects host metrics and ntfy delivers selected notifications from the Pi.
 The containers use the existing rootless `apps` account and run with `User=10001:10001`.
-The native Pi agent runs as `apps` with optional privileged collectors off.
+The native Pi agent runs in the `apps` user service manager with optional privileged collectors off.
+Its state remains in `/var/lib/beszel-agent` during migration from the system service.
 The loopback listeners are ports 8090 and 8081, with authenticated HTTPS access through Tailscale Serve on ports 8443 and 10443.
 Machine identities and credentials belong in machine-local configuration.
 
@@ -28,6 +29,8 @@ The rehearsal stages an explicit set of public sources and uses synthetic creden
 Production databases, credentials, and Tailscale state stay outside the rehearsal.
 
 The rehearsal applies the actual account, package, Quadlet, and agent declarations.
+The isolated boot target pulls in `network-online.target`, matching the device image's enrollment dependency without enrolling Tailscale.
+The rehearsal checks denied sudo, login without privilege, finite kernel memory limits, and failed agent migration recovery.
 It rejects missing nftables and aardvark-dns, then verifies that the declared package profile repairs the dependency failure.
 It checks native collection, non-root process identities, internal hostname resolution, anonymous denial, separate publication and subscription permissions, and delivery from Beszel to ntfy.
 Disposable disconnect and disk alerts use shortened thresholds to exercise both triggering and recovery.
@@ -64,7 +67,7 @@ Transfer only each service's required runtime file to the destination account.
 ## Native deployment and migration
 
 Use the configured Pi SSH account and persistent remote-command client.
-Preview `monitoring-plan` before applying `monitoring-apply` on the target.
+Install the [maintenance helper](operations.md) and preview `monitoring-plan` before applying `monitoring-apply /private/path/fresh-agent-backup` on the target.
 Keep the `apps` user manager running with lingering enabled and reload its units after applying the profile.
 Credential existence conditions keep unprovisioned services stopped.
 
@@ -92,9 +95,14 @@ Redirect the existing agents without replacing their tokens or the hub key.
 After installing its private environment file, start the native Pi agent in the Pi login shell.
 
 ```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now monitoring-agent.service
+systemctl --user daemon-reload
+systemctl --user enable --now monitoring-agent.service
 ```
+
+Run the agent commands as `apps`.
+For an existing system service, the maintenance helper backs up the unit and its activation state before migration.
+Migration failure restores the previous unit and activation state.
+Use `sudo raspberrypi-maintenance agent-restore /private/path/agent-backup` from the maintenance account to restore a completed migration.
 
 ```sh
 mise x -- cargo run --locked -- configure /private/path/client.json

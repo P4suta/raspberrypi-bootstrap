@@ -1,13 +1,19 @@
 # Rootless app runtime
 
 The app profile installs Podman and prepares the unprivileged app account.
-The account has no login shell or administrator group membership.
+The account has a POSIX login shell and no administrator group membership or sudo rules.
 User lingering keeps its systemd manager available after logout and at boot.
+Use the administrator account for `apps-plan` and `apps-apply`.
+Use the app account for daily operations after installing the [maintenance helper](operations.md).
 
 ```sh
 MISE_ENV=arm64 mise exec just@1.59.0 -- just apps-plan
 MISE_ENV=arm64 mise exec just@1.59.0 -- just apps-apply
-MISE_ENV=arm64 mise exec just@1.59.0 -- just apps-check
+```
+
+```sh
+raspberrypi-maintenance apps-check
+raspberrypi-maintenance apps-restart agent
 ```
 
 App binaries stay in pinned container images.

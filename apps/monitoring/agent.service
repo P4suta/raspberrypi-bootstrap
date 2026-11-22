@@ -5,17 +5,15 @@ After=network-online.target
 ConditionPathExists=/var/lib/apps/.config/monitoring/pi-agent.env
 
 [Service]
-User=apps
-Group=apps
 Environment=DATA_DIR=/var/lib/beszel-agent
 EnvironmentFile=/var/lib/apps/.config/monitoring/pi-agent.env
 ExecStart=/var/lib/apps/monitoring/bin/beszel-agent
 Restart=on-failure
 RestartSec=5
-StateDirectory=beszel-agent
-StateDirectoryMode=0700
+PrivateUsers=true
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/var/lib/beszel-agent
 ProtectHome=true
 PrivateTmp=true
 RestrictSUIDSGID=true
@@ -24,4 +22,4 @@ MemoryMax=128M
 TasksMax=64
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

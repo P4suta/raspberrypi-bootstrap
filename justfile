@@ -61,8 +61,31 @@ apps-apply:
     sudo --user apps env XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemctl --user daemon-reload
 
 apps-check:
-    sudo systemctl is-active "user@$(id -u apps).service"
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" podman unshare /usr/bin/true
+    /usr/local/bin/raspberrypi-maintenance apps-check
+
+apps-restart service:
+    /usr/local/bin/raspberrypi-maintenance apps-restart {{ quote(service) }}
+
+host-plan config:
+    sudo /usr/local/bin/raspberrypi-maintenance host-plan {{ quote(config) }}
+
+host-apply config backup:
+    sudo /usr/local/bin/raspberrypi-maintenance host-apply {{ quote(config) }} {{ quote(backup) }}
+
+host-check config:
+    sudo /usr/local/bin/raspberrypi-maintenance host-check {{ quote(config) }}
+
+host-restore backup:
+    sudo /usr/local/bin/raspberrypi-maintenance host-restore {{ quote(backup) }}
+
+host-recover:
+    sudo /usr/local/bin/raspberrypi-maintenance host-recover
+
+source-stage destination:
+    MISE_ENV=checks mise x -- cargo run --locked -- source-stage . {{ quote(destination) }}
+
+source-verify directory:
+    cargo run --locked -- source-verify {{ quote(directory) }}
 
 sites-plan:
     MISE_ENV=arm64,sites mise bootstrap --dry-run --only files
@@ -95,10 +118,9 @@ monitoring-preflight:
 monitoring-preflight-init mise agent:
     cargo run --locked -- preflight-init {{ quote(mise) }} {{ quote(agent) }}
 
-monitoring-apply:
+monitoring-apply backup:
     MISE_ENV=arm64,apps,monitoring mise bootstrap --yes --only accounts,packages,files,services
+    sudo /usr/local/bin/raspberrypi-maintenance agent-migrate {{ quote(backup) }}
 
 monitoring-check:
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemd-analyze --user verify --man=no --generators=true monitoring-beszel.service monitoring-ntfy.service
-    sudo --user apps env --chdir=/var/lib/apps XDG_RUNTIME_DIR="/run/user/$(id -u apps)" systemctl --user is-active monitoring-beszel.service monitoring-ntfy.service
-    systemctl is-active monitoring-agent.service
+    /usr/local/bin/raspberrypi-maintenance monitoring-check
