@@ -2,8 +2,8 @@ use anyhow::{Context, Result, bail, ensure};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{
-    collections::HashSet,
     fs,
+    io::{BufRead, BufReader},
     os::unix::fs::MetadataExt,
     process::Command,
     thread,
@@ -11,7 +11,7 @@ use std::{
 };
 
 const DASHBOARD: &str = "http://127.0.0.1:8092/";
-const TOPIC: &str = "http://127.0.0.1:8081/home-status/json?poll=1&since=all";
+const TOPIC: &str = "http://127.0.0.1:8081/home-status/json";
 const HISTORY: &str = "/var/lib/apps/humidity-monitor/readings.sqlite";
 const MODE: &str = "/run/humidity-rehearsal-mode";
 const RESTART: &str = "/var/tmp/humidity-rehearsal-checkpoint";
@@ -26,9 +26,11 @@ struct Reader {
     reader_password: String,
 }
 #[derive(Deserialize)]
-struct Notification {
-    id: String,
-    message: String,
+#[serde(tag = "event", rename_all = "lowercase")]
+enum Notification {
+    Open,
+    Keepalive,
+    Message { message: String },
 }
 
 fn until(description: &str, mut probe: impl FnMut() -> Result<bool>) -> Result<()> {
@@ -38,7 +40,7 @@ fn until(description: &str, mut probe: impl FnMut() -> Result<bool>) -> Result<(
             Instant::now() < deadline,
             "timed out waiting for {description}"
         );
-        thread::sleep(Duration::from_millis(400));
+        thread::sleep(Duration::from_secs(1));
     }
     Ok(())
 }
@@ -55,19 +57,12 @@ fn live(client: &Client) -> Result<bool> {
     let Ok(response) = client.get(DASHBOARD).send() else {
         return Ok(false);
     };
-    Ok(response.error_for_status()?.text()?.contains("45％"))
-}
-
-fn messages(client: &Client, reader: &Reader) -> Result<Vec<Notification>> {
-    client
-        .get(TOPIC)
-        .basic_auth("iphone", Some(&reader.reader_password))
-        .send()?
+    let current = response
         .error_for_status()?
         .text()?
-        .lines()
-        .map(|line| Ok(serde_json::from_str(line)?))
-        .collect()
+        .contains("45<small>％</small>");
+    Ok(current
+        && scalar("SELECT count(*) FROM monitor WHERE humidity=45 AND high=0 AND lost=0")? == 1)
 }
 
 fn check_access(client: &Client) -> Result<()> {
@@ -118,23 +113,37 @@ fn exercise(client: &Client, reader: &Reader) -> Result<()> {
     fs::write(MODE, "normal")?;
     until("a live humidity reading", || live(client))?;
     check_access(client)?;
+    let subscription = client
+        .get(TOPIC)
+        .basic_auth("iphone", Some(&reader.reader_password))
+        .timeout(Duration::from_secs(100))
+        .send()?
+        .error_for_status()?;
+    let mut lines = BufReader::new(subscription).lines();
+    let mut next = || -> Result<Notification> {
+        Ok(serde_json::from_str(
+            &lines.next().context("subscription closed")??,
+        )?)
+    };
+    ensure!(
+        matches!(next()?, Notification::Open),
+        "subscriber did not open"
+    );
     for (mode, expected) in [
         ("high", "高湿度"),
         ("normal", "高湿度から復旧"),
         ("silent", "受信途絶"),
         ("normal", "受信再開"),
     ] {
-        let seen: HashSet<_> = messages(client, reader)?
-            .into_iter()
-            .map(|m| m.id)
-            .collect();
         let title = format!("カメラ収納　{expected}");
         fs::write(MODE, mode)?;
-        until(expected, || {
-            Ok(messages(client, reader)?
-                .iter()
-                .any(|m| !seen.contains(&m.id) && m.message.lines().next() == Some(title.as_str())))
-        })?;
+        loop {
+            if let Notification::Message { message } = next()?
+                && message.lines().next() == Some(title.as_str())
+            {
+                break;
+            }
+        }
         println!("Received {mode} transition: {expected}");
     }
     let received = scalar("SELECT received FROM monitor")?;
@@ -194,7 +203,7 @@ fn main() -> Result<()> {
     );
     let credentials: Credentials =
         serde_json::from_slice(&fs::read("/workspace/fixture/state.json")?)?;
-    let client = Client::builder().timeout(Duration::from_secs(4)).build()?;
+    let client = Client::builder().timeout(Duration::from_secs(12)).build()?;
     match std::env::args().nth(1).as_deref() {
         Some("shorten-timers") => shorten_timers(),
         Some("exercise") => exercise(&client, &credentials.secrets),
