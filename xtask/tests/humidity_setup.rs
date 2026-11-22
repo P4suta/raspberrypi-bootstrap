@@ -1,6 +1,20 @@
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
+fn rehearsal_rejects_a_missing_image_before_starting_a_machine() {
+    let result = Command::new(env!("CARGO_BIN_EXE_raspberrypi-maintenance"))
+        .args([
+            "humidity-preflight",
+            "/missing-fixture/image.tar",
+            "/missing-fixture/workspace",
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("read the receiver image archive"));
+}
+
+#[test]
 fn registration_is_repeatable_and_grants_a_separate_write_only_topic() {
     let dir = std::env::temp_dir().join(format!("pi-humidity-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();

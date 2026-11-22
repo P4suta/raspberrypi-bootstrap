@@ -22,10 +22,15 @@ const SYSTEM: &str = "Preflight Linux";
 const HUB: &str = "http://127.0.0.1:8090/";
 const NTFY: &str = "http://127.0.0.1:8081/";
 const MACHINE: &str = "pi-operations-preflight";
+pub(crate) mod humidity;
 const MISE_SHA256: &str = "ae1151a87d70146119f68f7378001a12f09d2a38853087ed6139b7527a55f148";
 const AGENT_SHA256: &str = "bd6eed7a98493e0900c3398177552a53809546733ea69a8ad200e2cf4c7b677c";
 
 fn validate_machine(source: &Path) -> Result<()> {
+    validate_workspace(&source.join(".local/preflight"))
+}
+
+fn validate_workspace(workspace: &Path) -> Result<()> {
     let output = Command::new("orb")
         .args(["info", MACHINE, "--format", "json"])
         .output()?;
@@ -36,7 +41,7 @@ fn validate_machine(source: &Path) -> Result<()> {
     let info: Value = serde_json::from_slice(&output.stdout)?;
     let record = &info["record"];
     let config = &record["config"];
-    let mount = fs::canonicalize(source.join(".local/preflight"))?;
+    let mount = fs::canonicalize(workspace)?;
     ensure!(
         record["image"]["distro"] == "debian"
             && record["image"]["version"] == "trixie"
@@ -1270,6 +1275,7 @@ pub(super) fn run(action: &str) -> Result<()> {
             command("/usr/lib/podman/aardvark-dns", &["--version"])
         }
         "prepare" => prepare(),
+        "humidity" => humidity::install(),
         "seed" => seed(),
         "operations" => operations(),
         "check" => check(),

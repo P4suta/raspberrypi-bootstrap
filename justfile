@@ -134,3 +134,6 @@ humidity-apply:
 
 humidity-prepare directory address:
     cargo run --locked -- humidity-prepare {{ quote(directory) }} {{ quote(address) }}
+
+humidity-preflight image workspace=".local/preflight":
+    cargo run --locked -- humidity-preflight {{ quote(image) }} {{ quote(workspace) }}

@@ -12,7 +12,7 @@ use std::{
 };
 
 pub(crate) mod humidity;
-mod preflight;
+pub(crate) mod preflight;
 
 pub(super) fn fixture(action: &str) -> Result<()> {
     preflight::run(action)

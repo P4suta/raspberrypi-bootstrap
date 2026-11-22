@@ -137,11 +137,14 @@ fn main() -> Result<()> {
         [command] if command == "monitoring-check" => host::monitoring_check(),
         [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
-            println!("{USAGE} | humidity-prepare DIRECTORY ADDRESS");
+            println!("{USAGE} | humidity-preflight IMAGE WORKSPACE");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
             operations::initialize_preflight(Path::new(mise), Path::new(agent))
+        }
+        [command, image, workspace] if command == "humidity-preflight" => {
+            operations::preflight::humidity::local(Path::new(image), Path::new(workspace))
         }
         [command, config, id] if command == "cached" => operations::cached(Path::new(config), id),
         [command, config] if command == "prepare" => operations::prepare(Path::new(config)),
