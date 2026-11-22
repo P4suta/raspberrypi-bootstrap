@@ -13,3 +13,13 @@ just = "1.59.0"
 "apt:dbus-user-session" = "latest"
 "apt:libpam-systemd" = "latest"
 "apt:pkg-config" = "latest"
+"apt:sudo" = "latest"
+
+# The device image pulls this target through Tailscale enrollment.
+# The isolated machine has no Tailscale state or enrollment service.
+[bootstrap.directories."/etc/systemd/system/multi-user.target.d"]
+mode = "0755"
+
+[bootstrap.files."/etc/systemd/system/multi-user.target.d/network-online.conf"]
+content = "[Unit]\nWants=network-online.target\n"
+mode = "0644"
