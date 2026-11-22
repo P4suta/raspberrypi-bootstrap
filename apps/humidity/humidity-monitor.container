@@ -11,6 +11,7 @@ User=%U:%G
 Network=monitoring.network
 PublishPort=127.0.0.1:8092:8080
 Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+Environment=DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 Volume=%h/.config/humidity-monitor:/config:ro
 Volume=%h/humidity-monitor:/data
 Secret=humidity-ntfy-token,type=mount,target=ntfy-token,uid=%U,mode=0400

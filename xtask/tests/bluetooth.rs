@@ -67,6 +67,7 @@ fn rootless_unit_uses_the_host_uid_and_exposes_only_a_loopback_listener() {
         "UserNS=keep-id",
         "User=%U:%G",
         "Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro",
+        "Environment=DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
         "PublishPort=127.0.0.1:8092:8080",
         "Network=monitoring.network",
         "NoNewPrivileges=true",
