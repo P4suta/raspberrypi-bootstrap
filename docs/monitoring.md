@@ -7,6 +7,9 @@ Its state remains in `/var/lib/beszel-agent` during migration from the system se
 The loopback listeners are ports 8090 and 8081, with authenticated HTTPS access through Tailscale Serve on ports 8443 and 10443.
 Machine identities and credentials belong in machine-local configuration.
 
+The humidity service uses the same ntfy topic with a separate publisher.
+[Camera storage humidity](humidity.md)
+
 ## Local deployment rehearsal
 
 Finish local verification before changing a running host.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Simulated SwitchBot meter for ARM64 tests
+After=dbus.service
+ConditionHost=pi-operations-preflight
+
+[Service]
+ExecStart=/var/tmp/humidity-target/debug/examples/humidity_radio
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

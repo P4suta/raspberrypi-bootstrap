@@ -1,0 +1,25 @@
+[bootstrap.directories."/var/lib/apps/.config/humidity-monitor"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.directories."/var/lib/apps/humidity-monitor"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/etc/dbus-1/system.d/humidity-monitor.conf"]
+os = "linux"
+source = "apps/humidity/bluez.conf"
+owner = "root"
+group = "root"
+mode = "0644"
+
+[bootstrap.files."/var/lib/apps/.config/containers/systemd/humidity-monitor.container"]
+os = "linux"
+source = "apps/humidity/humidity-monitor.container"
+owner = "apps"
+group = "apps"
+mode = "0644"

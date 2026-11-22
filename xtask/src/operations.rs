@@ -11,7 +11,8 @@ use std::{
     time::Duration,
 };
 
-mod preflight;
+pub(crate) mod humidity;
+pub(crate) mod preflight;
 
 pub(super) fn fixture(action: &str) -> Result<()> {
     preflight::run(action)
@@ -708,6 +709,7 @@ pub(super) fn prepare(path: &Path) -> Result<()> {
         "NTFY_BASE_URL={}\nNTFY_AUTH_USERS=beszel:{publisher_hash}:user,iphone:{reader_hash}:user\nNTFY_AUTH_ACCESS=beszel:home-status:wo,iphone:home-status:ro\nNTFY_AUTH_TOKENS=beszel:{}:Beszel\n",
         inputs.ntfy_url, secret.publisher_token
     );
+    let ntfy = humidity::preserve_publisher(parent_directory(path)?, ntfy)?;
     private_write(&runtime.join("ntfy.env"), ntfy.as_bytes())?;
     let public_key = fs::read_to_string(&inputs.public_key_file)?
         .trim()

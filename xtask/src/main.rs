@@ -24,7 +24,7 @@ impl Drop for OperationLock {
     }
 }
 
-const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
+const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -112,6 +112,9 @@ fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
 fn main() -> Result<()> {
     let arguments: Vec<_> = env::args().skip(1).collect();
     match arguments.as_slice() {
+        [command, directory, address] if command == "humidity-prepare" => {
+            operations::humidity::register(Path::new(directory), address)
+        }
         [command] if command == "check" => check(Path::new(".")),
         [command] if command == "check-publication" => publication::check(Path::new(".")),
         [command] if command == "check-dependencies" => publication::dependencies(Path::new(".")),
@@ -134,11 +137,14 @@ fn main() -> Result<()> {
         [command] if command == "monitoring-check" => host::monitoring_check(),
         [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
-            println!("{USAGE}");
+            println!("{USAGE} | humidity-preflight IMAGE WORKSPACE");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
             operations::initialize_preflight(Path::new(mise), Path::new(agent))
+        }
+        [command, image, workspace] if command == "humidity-preflight" => {
+            operations::preflight::humidity::local(Path::new(image), Path::new(workspace))
         }
         [command, config, id] if command == "cached" => operations::cached(Path::new(config), id),
         [command, config] if command == "prepare" => operations::prepare(Path::new(config)),
