@@ -167,7 +167,7 @@ enum RotationAccess {
 }
 
 struct CredentialLock {
-    _file: fs::File,
+    _file: crate::OperationLock,
     config: PathBuf,
 }
 
@@ -188,8 +188,8 @@ fn credential_lock(config: &Path, access: RotationAccess) -> Result<CredentialLo
         .write(true)
         .mode(0o600)
         .open(&path)?;
-    lock.try_lock()
-        .context("another credential operation is active")?;
+    let lock =
+        crate::OperationLock::acquire(lock).context("another credential operation is active")?;
     let pending = match fs::symlink_metadata(root.join("reader-password-backup")) {
         Ok(metadata) => {
             ensure!(
@@ -1172,6 +1172,18 @@ mod tests {
         assert!(credential_lock(&path, RotationAccess::Stable).is_err());
         drop(lock);
         assert!(credential_lock(&path, RotationAccess::Stable).is_ok());
+    }
+
+    #[test]
+    fn releases_the_operation_lock_while_a_duplicated_descriptor_exists() {
+        let directory = Directory::new();
+        let path = directory.config(json!(["Mac", "Windows", "Linux", "Pi"]));
+        let lock = credential_lock(&path, RotationAccess::Stable).unwrap();
+        let descriptor = lock._file.0.try_clone().unwrap();
+        drop(lock);
+        let reacquired = credential_lock(&path, RotationAccess::Stable);
+        drop(descriptor);
+        assert!(reacquired.is_ok(), "{:#?}", reacquired.err());
     }
 
     #[test]
