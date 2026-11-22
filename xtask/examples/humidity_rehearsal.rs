@@ -66,6 +66,12 @@ fn live(client: &Client) -> Result<bool> {
 }
 
 fn check_access(client: &Client) -> Result<()> {
+    let account = Command::new("id").args(["-u", "apps"]).output()?;
+    ensure!(account.status.success(), "read the app account UID");
+    let uid = std::str::from_utf8(&account.stdout)?.trim();
+    let app_uid: u32 = uid.parse()?;
+    ensure!(app_uid > 0, "the app account must be unprivileged");
+    let runtime = format!("XDG_RUNTIME_DIR=/run/user/{uid}");
     let pid = Command::new("runuser")
         .args([
             "-u",
@@ -73,7 +79,7 @@ fn check_access(client: &Client) -> Result<()> {
             "--",
             "env",
             "--chdir=/var/lib/apps",
-            "XDG_RUNTIME_DIR=/run/user/1000",
+            &runtime,
             "podman",
             "inspect",
             "--format",
@@ -89,7 +95,7 @@ fn check_access(client: &Client) -> Result<()> {
         .find_map(|line| line.strip_prefix("Uid:"))
         .context("missing process identity")?;
     ensure!(
-        fs::metadata(HISTORY)?.uid() == 1000 && uids.split_whitespace().eq(["1000"; 4]),
+        fs::metadata(HISTORY)?.uid() == app_uid && uids.split_whitespace().eq([uid; 4]),
         "monitor must run as apps and own its database"
     );
     let token = fs::read_to_string("/var/tmp/humidity-credentials/runtime/humidity-ntfy-token")?;
