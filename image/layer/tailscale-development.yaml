@@ -36,6 +36,7 @@ mmdebstrap:
   setup-hooks:
     - install -D -m 0644 "${IGconf_access_source}/mise-tailscale.sources" "$1/etc/apt/sources.list.d/mise-tailscale.sources"
   packages:
+    - bluez
     - build-essential
     - ca-certificates
     - curl
@@ -61,9 +62,9 @@ mmdebstrap:
     - $BDEBSTRAP_HOOKS/enable-units "$1" tailscaled.service tailscale-enrollment.service
   cleanup-hooks:
     - uchroot "$1" 'set -eu; export PATH="$HOME/.local/bin:$PATH"; cd "$HOME/projects/raspberrypi-bootstrap"; MISE_ENV=arm64 mise bootstrap --yes --only files'
-    - systemctl --root="$1" mask iwd.service bluetooth.service hciuart.service
+    - systemctl --root="$1" mask iwd.service
+    - systemctl --root="$1" enable bluetooth.service
     - chroot "$1" systemd-analyze verify --man=no local-fs.target systemd-growfs-root.service
     - test "$(systemctl --root="$1" is-enabled iwd.service)" = masked
-    - test "$(systemctl --root="$1" is-enabled bluetooth.service)" = masked
-    - test "$(systemctl --root="$1" is-enabled hciuart.service)" = masked
+    - test "$(systemctl --root="$1" is-enabled bluetooth.service)" = enabled
     - cmp "${IGconf_access_source}/../config/radio-policy.txt" "$1/boot/firmware/radio-policy.txt"
