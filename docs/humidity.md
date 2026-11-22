@@ -47,7 +47,7 @@ Pass the generated `runtime/humidity-ntfy-token` to the rootless secret store us
 Run the following commands as `apps` for the first installation.
 
 ```sh
-podman secret create humidity-ntfy-token - < /private/path/runtime/humidity-ntfy-token
+podman secret create humidity-ntfy-token /private/path/runtime/humidity-ntfy-token
 systemctl --user daemon-reload
 systemctl --user restart monitoring-ntfy.service
 systemctl --user start humidity-monitor.service
@@ -58,6 +58,22 @@ The web service listens on the host at `127.0.0.1:8092`.
 Add a route to the private host configuration with an unused HTTPS port and target `http://127.0.0.1:8092`.
 Preview the route with `just host-plan`, apply it with `just host-apply`, and verify it with `just host-check`.
 Open the private HTTPS address on a phone connected to the tailnet.
+
+## Rehearse the deployment
+
+Complete the ARM64 monitoring rehearsal to prepare the isolated guest and its test subscriber.
+Export the receiver image tagged `localhost/humidity-monitor:installed` to a local archive.
+Run the humidity rehearsal from the bootstrap checkout.
+
+```sh
+podman save --output /private/path/receiver.tar localhost/humidity-monitor:installed
+mise x -- just humidity-preflight /private/path/receiver.tar
+```
+
+The Rust fixture emits simulated advertisements on the guest system bus.
+It checks that the service runs as the app account and that the account owns the SQLite database.
+It exercises high humidity and reception loss with shorter confirmation times and checks delivery through ntfy.
+It restarts the guest and verifies a new reception alongside the original SQLite history.
 
 ## Check storage conditions
 
