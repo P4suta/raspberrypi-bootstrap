@@ -57,8 +57,10 @@ impl Browser {
             "--no-proxy-server","--host-resolver-rules=MAP device.example.ts.net ~NOTFOUND"]}}}});
         let response: Value = client
             .post(format!("{origin}/session"))
+            .timeout(Duration::from_secs(90))
             .json(&capabilities)
-            .send()?
+            .send()
+            .context("create the headless Chrome session")?
             .json()?;
         let id = response["value"]["sessionId"]
             .as_str()
