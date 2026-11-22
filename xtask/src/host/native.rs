@@ -525,9 +525,7 @@ pub(crate) fn bootline(path: &Path) -> Result<()> {
 }
 
 fn app(arguments: &[&str]) -> Result<Command> {
-    let uid = String::from_utf8(output(Command::new("/usr/bin/id").args(["-u", "apps"]))?)?;
-    let uid: u32 = uid.trim().parse()?;
-    ensure!(uid > 0, "app account must remain unprivileged");
+    let uid = app_uid()?;
     let mut command = Command::new("/usr/sbin/runuser");
     command
         .args([
@@ -543,8 +541,69 @@ fn app(arguments: &[&str]) -> Result<Command> {
     Ok(command)
 }
 
+fn app_uid() -> Result<u32> {
+    let uid = String::from_utf8(output(Command::new("/usr/bin/id").args(["-u", "apps"]))?)?;
+    let uid: u32 = uid.trim().parse()?;
+    ensure!(uid > 0, "app account must remain unprivileged");
+    Ok(uid)
+}
+
+fn offline_agent_stopped(manager: &str, events: Option<&str>) -> bool {
+    matches!(manager.trim(), "inactive" | "failed")
+        && events.is_none_or(|text| text.lines().any(|line| line == "populated 0"))
+}
+
+fn disable_user_agent() -> Result<()> {
+    let result = output(&mut app(&[
+        "/usr/bin/systemctl",
+        "--user",
+        "disable",
+        "--now",
+        "monitoring-agent.service",
+    ])?);
+    let Err(error) = result else {
+        return Ok(());
+    };
+    let uid = app_uid()?;
+    let state = String::from_utf8(output(Command::new("/usr/bin/systemctl").args([
+        "show",
+        "--property=ActiveState",
+        "--value",
+        &format!("user@{uid}.service"),
+    ]))?)?;
+    let group = format!(
+        "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/monitoring-agent.service/cgroup.events"
+    );
+    let events = match fs::read_to_string(group) {
+        Ok(events) => Some(events),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if !offline_agent_stopped(&state, events.as_deref()) {
+        return Err(error.context("cannot confirm the user agent is stopped"));
+    }
+    let units = Path::new("/var/lib/apps/.config/systemd/user");
+    let link = units.join("default.target.wants/monitoring-agent.service");
+    match fs::read_link(&link) {
+        Ok(target) => {
+            let parent = link.parent().context("unit link has no parent")?;
+            ensure!(
+                fs::canonicalize(parent.join(target))?
+                    == fs::canonicalize(units.join("monitoring-agent.service"))?,
+                "user unit link belongs to another service"
+            );
+            fs::remove_file(&link)?;
+            sync_parent(&link)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
 pub(crate) fn agent_migrate(backup: &Path) -> Result<()> {
     root()?;
+    let _lock = host_lock()?;
     let legacy = Path::new("/etc/systemd/system/monitoring-agent.service");
     if !legacy.exists() {
         return Ok(());
@@ -604,7 +663,7 @@ pub(crate) fn agent_migrate(backup: &Path) -> Result<()> {
         Ok(())
     }();
     if let Err(error) = result {
-        return match agent_restore(backup) {
+        return match agent_restore_locked(backup) {
             Ok(()) => Err(error.context("agent migration failed; system service restored")),
             Err(restore) => {
                 Err(error.context(format!("agent migration and restoration failed: {restore}")))
@@ -617,17 +676,16 @@ pub(crate) fn agent_migrate(backup: &Path) -> Result<()> {
 
 pub(crate) fn agent_restore(backup: &Path) -> Result<()> {
     root()?;
+    let _lock = host_lock()?;
+    agent_restore_locked(backup)
+}
+
+fn agent_restore_locked(backup: &Path) -> Result<()> {
     ensure!(
         fs::read(backup.join("machine-id"))? == fs::read("/etc/machine-id")?,
         "agent backup belongs to another host"
     );
-    output(&mut app(&[
-        "/usr/bin/systemctl",
-        "--user",
-        "disable",
-        "--now",
-        "monitoring-agent.service",
-    ])?)?;
+    disable_user_agent()?;
     replace(
         Path::new("/etc/systemd/system/monitoring-agent.service"),
         &fs::read(backup.join("agent.service"))?,
@@ -820,6 +878,22 @@ mod tests {
         let request = request.context("local API fixture exchange failed")?;
         result?;
         Ok(request)
+    }
+
+    #[test]
+    fn requires_an_inactive_manager_and_an_empty_agent_group_for_offline_recovery() {
+        for state in ["active", "activating", "deactivating", "unknown"] {
+            assert!(!super::offline_agent_stopped(state, None));
+        }
+        for state in ["inactive", "failed"] {
+            assert!(super::offline_agent_stopped(state, None));
+            assert!(super::offline_agent_stopped(
+                state,
+                Some("populated 0\nfrozen 0\n")
+            ));
+            assert!(!super::offline_agent_stopped(state, Some("populated 1\n")));
+            assert!(!super::offline_agent_stopped(state, Some("")));
+        }
     }
 
     #[test]

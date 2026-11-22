@@ -621,7 +621,15 @@ fn operations() -> Result<()> {
         "--quiet",
         "monitoring-agent.service",
     ])?;
-    crate::host::agent_restore(&backup)?;
+    let manager = format!("user@{}.service", app_output(&["id", "-u"])?);
+    command("systemctl", &["stop", &manager])?;
+    let recovery = crate::host::agent_restore(&backup);
+    command("systemctl", &["start", &manager])?;
+    recovery?;
+    command(
+        "systemctl",
+        &["is-active", "--quiet", "monitoring-agent.service"],
+    )?;
     crate::host::agent_migrate(&operation_root.join("agent-restored-migration"))?;
     for (unit, limit) in [
         ("monitoring-beszel.service", "536870912"),
