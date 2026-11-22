@@ -75,8 +75,8 @@ impl SourcePath {
             .to_ascii_lowercase();
         ensure!(
             ![
-                "env", "pem", "key", "pub", "p12", "sqlite", "db", "img", "dmg", "iso", "spk",
-                "tar", "zip", "gz", "zst"
+                "env", "pem", "key", "pub", "p12", "sqlite", "redb", "db", "img", "dmg", "iso",
+                "spk", "tar", "zip", "gz", "zst"
             ]
             .contains(&extension.as_str()),
             "private keys, databases, and deployment artifacts cannot be published"
@@ -301,6 +301,7 @@ mod tests {
             "config/.env.local",
             "boot/recovery.pem",
             "card.img.zst",
+            "history/readings.redb",
             "settings/credentials.txt",
             "mise.local.toml",
             "../credentials.txt",
