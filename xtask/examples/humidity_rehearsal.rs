@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     os::unix::fs::MetadataExt,
+    path::Path,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -16,6 +17,29 @@ const HISTORY: &str = "/var/lib/apps/humidity-monitor/readings.sqlite";
 const MODE: &str = "/run/humidity-rehearsal-mode";
 const RESTART: &str = "/var/tmp/humidity-rehearsal-checkpoint";
 const CONFIG: &str = "/var/lib/apps/.config/humidity-monitor/monitor.toml";
+
+#[derive(Clone, Copy)]
+enum RadioMode {
+    Normal,
+    High,
+    Silent,
+}
+
+impl RadioMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Silent => "silent",
+        }
+    }
+
+    fn publish(self, path: &Path) -> Result<()> {
+        let next = path.with_extension(format!("next-{}", std::process::id()));
+        fs::write(&next, self.as_str())?;
+        Ok(fs::rename(next, path)?)
+    }
+}
 
 #[derive(Deserialize)]
 struct Credentials {
@@ -116,7 +140,7 @@ fn check_access(client: &Client) -> Result<()> {
 }
 
 fn exercise(client: &Client, reader: &Reader) -> Result<()> {
-    fs::write(MODE, "normal")?;
+    RadioMode::Normal.publish(Path::new(MODE))?;
     until("a live humidity reading", || live(client))?;
     check_access(client)?;
     let subscription = client
@@ -136,13 +160,13 @@ fn exercise(client: &Client, reader: &Reader) -> Result<()> {
         "subscriber did not open"
     );
     for (mode, expected) in [
-        ("high", "高湿度"),
-        ("normal", "高湿度から復旧"),
-        ("silent", "受信途絶"),
-        ("normal", "受信再開"),
+        (RadioMode::High, "高湿度"),
+        (RadioMode::Normal, "高湿度から復旧"),
+        (RadioMode::Silent, "受信途絶"),
+        (RadioMode::Normal, "受信再開"),
     ] {
         let title = format!("カメラ収納　{expected}");
-        fs::write(MODE, mode)?;
+        mode.publish(Path::new(MODE))?;
         loop {
             if let Notification::Message { message } = next()?
                 && message.lines().next() == Some(title.as_str())
@@ -150,7 +174,7 @@ fn exercise(client: &Client, reader: &Reader) -> Result<()> {
                 break;
             }
         }
-        println!("Received {mode} transition: {expected}");
+        println!("Received {} transition: {expected}", mode.as_str());
     }
     let received = scalar("SELECT received FROM monitor")?;
     let sample = scalar("SELECT min(received) FROM samples")?;
@@ -172,7 +196,7 @@ fn resumed(client: &Client) -> Result<()> {
         boot != fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim(),
         "guest has not restarted"
     );
-    fs::write(MODE, "normal")?;
+    RadioMode::Normal.publish(Path::new(MODE))?;
     until("a fresh reading after reboot", || {
         Ok(live(client)? && scalar("SELECT received FROM monitor")? > previous)
     })?;
@@ -198,6 +222,7 @@ fn shorten_timers() -> Result<()> {
         settings = settings.replace(production, fixture);
     }
     fs::write(CONFIG, settings)?;
+    RadioMode::Normal.publish(Path::new(MODE))?;
     Ok(())
 }
 
@@ -215,5 +240,25 @@ fn main() -> Result<()> {
         Some("exercise") => exercise(&client, &credentials.secrets),
         Some("resumed") => resumed(&client),
         _ => bail!("expected shorten-timers, exercise or resumed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn readers_keep_a_complete_mode_during_a_transition() -> Result<()> {
+        let file = std::env::temp_dir().join(format!("humidity-mode-{}", std::process::id()));
+        RadioMode::Normal.publish(&file)?;
+        let mut previous = fs::File::open(&file)?;
+        RadioMode::High.publish(&file)?;
+        let mut observed = String::new();
+        previous.read_to_string(&mut observed)?;
+        let next = fs::read_to_string(&file)?;
+        fs::remove_file(file)?;
+        assert_eq!((observed.as_str(), next.as_str()), ("normal", "high"));
+        Ok(())
     }
 }

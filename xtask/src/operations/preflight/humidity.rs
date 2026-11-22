@@ -193,7 +193,6 @@ pub(super) fn install() -> Result<()> {
         "install the rehearsal publisher token"
     );
     command(EXERCISE, &["shorten-timers"])?;
-    fs::write("/run/humidity-rehearsal-mode", "normal")?;
     app(&["systemctl", "--user", "daemon-reload"])?;
     app(&["systemctl", "--user", "restart", "monitoring-ntfy.service"])?;
     app(&["systemctl", "--user", "restart", "humidity-monitor.service"])?;

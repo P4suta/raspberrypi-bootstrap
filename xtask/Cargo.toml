@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[[example]]
+name = "humidity_rehearsal"
+test = true
+
 [lints]
 workspace = true
 
