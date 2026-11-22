@@ -955,6 +955,11 @@ mod tests {
         assert_eq!(fs::read(&files[0].path)?, b"installed");
         assert_eq!(fs::read(&files[1].path)?, b"newer");
         super::replace(&files[1].path, b"installed", 0o600)?;
+        let recorded = dir.join("second.applied");
+        fs::create_dir(&recorded)?;
+        assert!(super::restore_files(&dir, &files).is_err());
+        assert_eq!(fs::read(&files[0].path)?, b"installed");
+        fs::remove_dir(recorded)?;
         super::restore_files(&dir, &files)?;
         super::restore_files(&dir, &files)?;
         assert!(!files.iter().any(|file| file.path.exists()));
