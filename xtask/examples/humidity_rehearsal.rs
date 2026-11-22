@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     os::unix::fs::MetadataExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -13,7 +13,7 @@ use std::{
 
 const DASHBOARD: &str = "http://127.0.0.1:8092/";
 const TOPIC: &str = "http://127.0.0.1:8081/home-status/json";
-const HISTORY: &str = "/var/lib/apps/humidity-monitor/readings.sqlite";
+const DATA: &str = "/var/lib/apps/humidity-monitor";
 const MODE: &str = "/run/humidity-rehearsal-mode";
 const RESTART: &str = "/var/tmp/humidity-rehearsal-checkpoint";
 const CONFIG: &str = "/var/lib/apps/.config/humidity-monitor/monitor.toml";
@@ -69,24 +69,66 @@ fn until(description: &str, mut probe: impl FnMut() -> Result<bool>) -> Result<(
     Ok(())
 }
 
-fn scalar(query: &str) -> Result<i64> {
-    let data = Command::new("sqlite3")
-        .args(["-readonly", "-cmd", ".timeout 4000", HISTORY, query])
-        .output()?;
-    ensure!(data.status.success(), "cannot read rehearsal history");
-    Ok(std::str::from_utf8(&data.stdout)?.trim().parse()?)
+fn configured_history(settings: &str) -> Result<PathBuf> {
+    let name = settings
+        .lines()
+        .find_map(|line| line.strip_prefix("database = \"/data/")?.strip_suffix('"'))
+        .context("missing recorder database path")?;
+    ensure!(
+        Path::new(name).file_name().is_some_and(|file| file == name) && name.ends_with(".redb"),
+        "invalid recorder database path"
+    );
+    Ok(Path::new(DATA).join(name))
 }
 
-fn live(client: &Client) -> Result<bool> {
-    let Ok(response) = client.get(DASHBOARD).send() else {
-        return Ok(false);
-    };
-    let current = response
-        .error_for_status()?
-        .text()?
-        .contains("45<small>％</small>");
-    Ok(current
-        && scalar("SELECT count(*) FROM monitor WHERE humidity=45 AND high=0 AND lost=0")? == 1)
+fn timestamp(fragment: &str) -> Result<&str> {
+    let (_, rest) = fragment
+        .split_once("<time datetime=\"")
+        .context("missing observation time")?;
+    let (value, _) = rest
+        .split_once('"')
+        .context("incomplete observation time")?;
+    ensure!(
+        value.len() == 20 && value.ends_with('Z'),
+        "expected a UTC timestamp in seconds"
+    );
+    Ok(value)
+}
+
+fn page(client: &Client) -> Result<String> {
+    Ok(client.get(DASHBOARD).send()?.error_for_status()?.text()?)
+}
+
+fn live(body: &str) -> bool {
+    body.contains("45<small>％</small>") && !body.contains("<p class=\"status\">受信途絶")
+}
+
+fn imported_time(body: &str) -> Result<&str> {
+    let row = body
+        .split("<tr>")
+        .find(|row| {
+            row.split("</tr>")
+                .next()
+                .is_some_and(|cells| cells.contains("<td>43％</td>"))
+        })
+        .context("missing imported humidity sample")?;
+    timestamp(row)
+}
+
+fn seed_history(path: &Path) -> Result<()> {
+    ensure!(!path.exists(), "expected a fresh rehearsal history");
+    let sql = "CREATE TABLE monitor(id INTEGER PRIMARY KEY,address TEXT,started INTEGER,received INTEGER,temperature INTEGER,humidity INTEGER,battery INTEGER,pending_since INTEGER,high INTEGER,lost INTEGER);
+        CREATE TABLE samples(minute INTEGER PRIMARY KEY,received INTEGER,temperature INTEGER,humidity INTEGER,battery INTEGER);
+        CREATE TABLE outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT,at INTEGER);
+        INSERT INTO monitor VALUES(1,'AA:BB:CC:DD:EE:FF',unixepoch()-600,unixepoch()-240,225,43,99,NULL,0,0);
+        INSERT INTO samples SELECT received/60,received,temperature,humidity,battery FROM monitor;";
+    let status = Command::new("runuser")
+        .args(["-u", "apps", "--", "sqlite3", "-bail"])
+        .arg(path)
+        .arg(sql)
+        .status()?;
+    ensure!(status.success(), "seed the previous receiver format");
+    Ok(())
 }
 
 fn check_access(client: &Client) -> Result<()> {
@@ -119,7 +161,8 @@ fn check_access(client: &Client) -> Result<()> {
         .find_map(|line| line.strip_prefix("Uid:"))
         .context("missing process identity")?;
     ensure!(
-        fs::metadata(HISTORY)?.uid() == app_uid && uids.split_whitespace().eq([uid; 4]),
+        fs::metadata(configured_history(&fs::read_to_string(CONFIG)?)?)?.uid() == app_uid
+            && uids.split_whitespace().eq([uid; 4]),
         "monitor must run as apps and own its database"
     );
     let token = fs::read_to_string("/var/tmp/humidity-credentials/runtime/humidity-ntfy-token")?;
@@ -141,7 +184,9 @@ fn check_access(client: &Client) -> Result<()> {
 
 fn exercise(client: &Client, reader: &Reader) -> Result<()> {
     RadioMode::Normal.publish(Path::new(MODE))?;
-    until("a live humidity reading", || live(client))?;
+    until("a live humidity reading", || {
+        Ok(page(client).is_ok_and(|body| live(&body)))
+    })?;
     check_access(client)?;
     let subscription = client
         .get(TOPIC)
@@ -176,8 +221,9 @@ fn exercise(client: &Client, reader: &Reader) -> Result<()> {
         }
         println!("Received {} transition: {expected}", mode.as_str());
     }
-    let received = scalar("SELECT received FROM monitor")?;
-    let sample = scalar("SELECT min(received) FROM samples")?;
+    let body = page(client)?;
+    let received = timestamp(&body)?;
+    let sample = imported_time(&body)?;
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
     fs::write(RESTART, format!("{} {received} {sample}", boot.trim()))?;
     Ok(())
@@ -187,21 +233,21 @@ fn resumed(client: &Client) -> Result<()> {
     let saved = fs::read_to_string(RESTART)?;
     let mut values = saved.split_whitespace();
     let boot = values.next().context("missing saved boot ID")?;
-    let previous: i64 = values.next().context("missing reception time")?.parse()?;
-    let sample: i64 = values
-        .next()
-        .context("missing first minute sample")?
-        .parse()?;
+    let previous = values.next().context("missing reception time")?;
+    let sample = values.next().context("missing first minute sample")?;
     ensure!(
         boot != fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim(),
         "guest has not restarted"
     );
     RadioMode::Normal.publish(Path::new(MODE))?;
     until("a fresh reading after reboot", || {
-        Ok(live(client)? && scalar("SELECT received FROM monitor")? > previous)
+        let Ok(body) = page(client) else {
+            return Ok(false);
+        };
+        Ok(live(&body) && timestamp(&body)? > previous)
     })?;
     ensure!(
-        scalar("SELECT min(received) FROM samples")? == sample,
+        imported_time(&page(client)?)? == sample,
         "reboot lost the first recorded sample"
     );
     println!("Fresh reception resumed after reboot and minute history survived");
@@ -221,6 +267,18 @@ fn shorten_timers() -> Result<()> {
         );
         settings = settings.replace(production, fixture);
     }
+    let old_path = configured_history(&settings)?;
+    let run = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let file = format!("rehearsal-{run}.redb");
+    settings = settings.replace(
+        "database = \"/data/readings.redb\"",
+        &format!("database = \"/data/{file}\""),
+    );
+    let path = configured_history(&settings)?;
+    ensure!(path != old_path, "expected the production redb path");
+    seed_history(&path.with_extension("sqlite"))?;
     fs::write(CONFIG, settings)?;
     RadioMode::Normal.publish(Path::new(MODE))?;
     Ok(())
@@ -247,6 +305,16 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn the_saved_sample_uses_its_own_row_and_rejects_an_unrelated_humidity() -> Result<()> {
+        let html = r#"<time datetime="2026-01-01T00:03:00Z"></time><tr><td><time datetime="2026-01-01T00:02:00Z"></time></td><td>45％</td></tr><tr><td><time datetime="2026-01-01T00:01:00Z"></time></td><td>43％</td></tr>"#;
+        assert_eq!(timestamp(html)?, "2026-01-01T00:03:00Z");
+        assert_eq!(imported_time(html)?, "2026-01-01T00:01:00Z");
+        assert!(imported_time(&html.replace("43％", "41％")).is_err());
+        assert!(configured_history("database = \"/data/../wrong.redb\"").is_err());
+        Ok(())
+    }
 
     #[test]
     fn readers_keep_a_complete_mode_during_a_transition() -> Result<()> {
