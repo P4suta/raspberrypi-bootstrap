@@ -87,8 +87,27 @@ impl MemoryBootLine {
             "kernel arguments must occupy one nonempty line"
         );
         let mut arguments = Vec::new();
-        for argument in line.split_whitespace() {
+        let mut remaining = line.trim_start_matches([' ', '\t']);
+        while !remaining.is_empty() {
+            let mut quoted = false;
+            let end = remaining
+                .find(|c: char| {
+                    if c == '"' {
+                        quoted = !quoted;
+                    }
+                    !quoted && matches!(c, ' ' | '\t')
+                })
+                .unwrap_or(remaining.len());
+            let (argument, rest) = remaining.split_at(end);
+            if argument == "--" {
+                break;
+            }
+            remaining = rest.trim_start_matches([' ', '\t']);
             if let Some(controllers) = argument.strip_prefix("cgroup_disable=") {
+                let controllers = controllers
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(controllers);
                 let retained: Vec<_> = controllers.split(',').filter(|c| *c != "memory").collect();
                 if !retained.is_empty() {
                     arguments.push(format!("cgroup_disable={}", retained.join(",")));
@@ -99,6 +118,9 @@ impl MemoryBootLine {
             }
         }
         arguments.push("cgroup_enable=memory".to_owned());
+        if !remaining.is_empty() {
+            arguments.push(remaining.to_owned());
+        }
         Ok(Self(format!("{}\n", arguments.join(" "))))
     }
 }
@@ -106,40 +128,47 @@ impl MemoryBootLine {
 impl Config {
     pub(crate) fn restore_routes(
         &self,
-        _before: &Value,
-        _applied: &Value,
+        before: &Value,
+        applied: &Value,
         current: &Value,
     ) -> Result<Value> {
         self.validate()?;
         let mut restored = current.clone();
         for route in &self.routes {
-            for (field, key) in [
-                ("TCP", route.port.to_string()),
-                ("Web", format!("{}:{}", self.tailnet_name, route.port)),
-            ] {
-                let before = _before[field].get(&key);
-                let applied = _applied[field].get(&key);
-                if before == applied || restored[field].get(&key) == before {
-                    continue;
-                }
-                ensure!(
-                    restored[field].get(&key) == applied,
-                    "route changed after the managed update; recovery refuses to overwrite it"
-                );
-                if restored.get(field).is_none_or(Value::is_null) {
-                    restored[field] = json!({});
-                }
-                let entries = restored[field]
+            let port = route.port.to_string();
+            let origin = format!("{}:{port}", self.tailnet_name);
+            let old = &before["Web"][&origin];
+            let installed = &applied["Web"][&origin];
+            if old["Handlers"].get("/") != installed["Handlers"].get("/")
+                && restored["Web"][&origin]["Handlers"].get("/") != old["Handlers"].get("/")
+            {
+                let web = restored["Web"]
                     .as_object_mut()
-                    .context("invalid Serve endpoint map")?;
-                match before {
-                    Some(value) => {
-                        entries.insert(key, value.clone());
-                    }
-                    None => {
-                        entries.remove(&key);
-                    }
+                    .context("missing Serve origins")?;
+                let entry = web
+                    .get_mut(&origin)
+                    .context("managed origin changed after the update")?;
+                restore_entry(
+                    &old["Handlers"],
+                    &installed["Handlers"],
+                    &mut entry["Handlers"],
+                    "/",
+                )?;
+                if old.is_null() && entry == &json!({"Handlers":{}}) {
+                    web.remove(&origin);
                 }
+            }
+            let shares_listener = restored["Web"].as_object().is_some_and(|web| {
+                web.iter().any(|(name, site)| {
+                    name.rsplit_once(':')
+                        .is_some_and(|(_, number)| number == port)
+                        && site["Handlers"]
+                            .as_object()
+                            .is_some_and(|mounts| !mounts.is_empty())
+                })
+            });
+            if before["TCP"].get(&port).is_some() || !shares_listener {
+                restore_entry(&before["TCP"], &applied["TCP"], &mut restored["TCP"], &port)?;
             }
         }
         Ok(restored)
@@ -243,9 +272,9 @@ impl Config {
             let port = route.port.to_string();
             let origin = format!("{}:{}", self.tailnet_name, route.port);
             if !route.alternatives.is_empty()
-                && let Some(existing) = updated["Web"].get(&origin)
+                && let Some(existing) = updated["Web"][&origin]["Handlers"].get("/")
             {
-                let proxy = existing["Handlers"]["/"]["Proxy"]
+                let proxy = existing["Proxy"]
                     .as_str()
                     .context("fallback route has no proxy")?;
                 ensure!(
@@ -260,10 +289,45 @@ impl Config {
                 continue;
             }
             updated["TCP"][&port] = json!({"HTTPS":true});
-            updated["Web"][&origin] = json!({"Handlers":{"/":{"Proxy":route.target}}});
+            let site = updated["Web"]
+                .as_object_mut()
+                .context("invalid Serve origins")?
+                .entry(origin)
+                .or_insert_with(|| json!({}));
+            let handlers = site
+                .as_object_mut()
+                .context("invalid Serve origin")?
+                .entry("Handlers")
+                .or_insert_with(|| json!({}));
+            handlers
+                .as_object_mut()
+                .context("invalid Serve handlers")?
+                .insert("/".to_owned(), json!({"Proxy":route.target}));
         }
         Ok(updated)
     }
+}
+
+fn restore_entry(before: &Value, applied: &Value, current: &mut Value, key: &str) -> Result<()> {
+    if before.get(key) == applied.get(key) || current.get(key) == before.get(key) {
+        return Ok(());
+    }
+    ensure!(
+        current.get(key) == applied.get(key),
+        "route changed after the managed update"
+    );
+    let entries = current
+        .as_object_mut()
+        .context("invalid Serve endpoint map")?;
+    match before.get(key) {
+        Some(value) => {
+            entries.insert(key.to_owned(), value.clone());
+        }
+        None => {
+            entries.remove(key);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -312,6 +376,48 @@ mod tests {
         );
         assert_eq!(MemoryBootLine::parse(&updated)?.0, updated);
         assert!(MemoryBootLine::parse("root=a\nroot=b\n").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn leaves_init_arguments_and_quoted_values_intact() -> Result<()> {
+        let source = "rootwait note=\"one  two -- three\" cgroup_disable=memory,io -- single  cgroup_disable=memory\n";
+        let expected = "rootwait note=\"one  two -- three\" cgroup_disable=io cgroup_enable=memory -- single  cgroup_disable=memory\n";
+        assert_eq!(MemoryBootLine::parse(source)?.0, expected);
+        assert_eq!(MemoryBootLine::parse(expected)?.0, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_other_mounts_on_the_same_origin_during_apply_and_restore() -> Result<()> {
+        let config = config()?;
+        let origin = "device.example.ts.net:8443";
+        let before = json!({"TCP":{"8443":{"HTTPS":true}},"Web":{origin:{
+            "Handlers":{"/health":{"Text":"ready"}},"OpaqueField":true
+        }}});
+        let applied = config.serve_config(&before)?;
+        assert_eq!(
+            applied["Web"][origin]["Handlers"]["/health"],
+            before["Web"][origin]["Handlers"]["/health"]
+        );
+        assert_eq!(applied["Web"][origin]["OpaqueField"], true);
+        let mut current = applied.clone();
+        current["Web"][origin]["Handlers"]["/health"] = json!({"Text":"updated"});
+        let restored = config.restore_routes(&before, &applied, &current)?;
+        assert_eq!(
+            restored["Web"][origin]["Handlers"],
+            json!({"/health":{"Text":"updated"}})
+        );
+        assert_eq!(restored["Web"][origin]["OpaqueField"], true);
+        let mut added = config.serve_config(&json!({}))?;
+        added["Web"][origin]["Handlers"]["/other"] = json!({"Text":"new"});
+        let original_apply = config.serve_config(&json!({}))?;
+        let restored = config.restore_routes(&json!({}), &original_apply, &added)?;
+        assert_eq!(
+            restored["Web"][origin]["Handlers"],
+            json!({"/other":{"Text":"new"}})
+        );
+        assert_eq!(restored["TCP"]["8443"], json!({"HTTPS":true}));
         Ok(())
     }
 
