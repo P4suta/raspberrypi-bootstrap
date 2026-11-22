@@ -1,0 +1,19 @@
+[bootstrap.directories."/etc/tailscale-subnet-router"]
+os = "linux"
+owner = "root"
+group = "root"
+mode = "0755"
+
+[bootstrap.files."/etc/tailscale-subnet-router/forwarding.conf"]
+os = "linux"
+source = "config/routing/forwarding.conf"
+owner = "root"
+group = "root"
+mode = "0644"
+
+[bootstrap.files."/etc/systemd/system/tailscale-subnet-router.service"]
+os = "linux"
+source = "config/routing/subnet-router.service"
+owner = "root"
+group = "root"
+mode = "0644"

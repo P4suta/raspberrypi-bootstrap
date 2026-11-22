@@ -1,0 +1,17 @@
+[Unit]
+Description=Tailscale private subnet routing
+Requires=tailscaled.service
+After=tailscaled.service network-online.target systemd-sysctl.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/tailscale-subnet-router
+ExecStartPre=/usr/sbin/iptables -P FORWARD DROP
+ExecStartPre=/usr/sbin/ip6tables -P FORWARD DROP
+ExecStartPre=/usr/sbin/sysctl --load=/etc/tailscale-subnet-router/forwarding.conf
+ExecStart=/usr/bin/tailscale set --advertise-routes=${SUBNET_ROUTES} --snat-subnet-routes=true --stateful-filtering=true
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
