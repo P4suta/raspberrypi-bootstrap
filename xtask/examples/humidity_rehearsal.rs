@@ -103,16 +103,30 @@ fn live(body: &str) -> bool {
     body.contains("45<small>％</small>") && !body.contains("<p class=\"status\">受信途絶")
 }
 
-fn imported_time(body: &str) -> Result<&str> {
-    let row = body
-        .split("<tr>")
-        .find(|row| {
-            row.split("</tr>")
-                .next()
-                .is_some_and(|cells| cells.contains("<td>43％</td>"))
-        })
-        .context("missing imported humidity sample")?;
-    timestamp(row)
+fn sample_times(body: &str, humidity: u8) -> Result<Vec<&str>> {
+    let (_, table) = body
+        .split_once("<tbody>")
+        .context("missing history table")?;
+    let (rows, _) = table
+        .split_once("</tbody>")
+        .context("incomplete history table")?;
+    let cell = format!("<td>{humidity}％</td>");
+    rows.split("</tr>")
+        .filter(|row| row.contains(&cell))
+        .map(timestamp)
+        .collect()
+}
+
+fn verify_saved_samples(body: &str, imported: &str, recorded: &str) -> Result<()> {
+    ensure!(
+        sample_times(body, 43)?.contains(&imported),
+        "reboot lost the imported measurement"
+    );
+    ensure!(
+        sample_times(body, 45)?.contains(&recorded),
+        "reboot lost the receiver's earlier measurement"
+    );
+    Ok(())
 }
 
 fn seed_history(path: &Path) -> Result<()> {
@@ -223,9 +237,17 @@ fn exercise(client: &Client, reader: &Reader) -> Result<()> {
     }
     let body = page(client)?;
     let received = timestamp(&body)?;
-    let sample = imported_time(&body)?;
+    let imported = *sample_times(&body, 43)?
+        .first()
+        .context("missing imported sample")?;
+    let recorded = *sample_times(&body, 45)?
+        .first()
+        .context("missing recorded sample")?;
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
-    fs::write(RESTART, format!("{} {received} {sample}", boot.trim()))?;
+    fs::write(
+        RESTART,
+        format!("{} {received} {imported} {recorded}", boot.trim()),
+    )?;
     Ok(())
 }
 
@@ -234,7 +256,8 @@ fn resumed(client: &Client) -> Result<()> {
     let mut values = saved.split_whitespace();
     let boot = values.next().context("missing saved boot ID")?;
     let previous = values.next().context("missing reception time")?;
-    let sample = values.next().context("missing first minute sample")?;
+    let imported = values.next().context("missing imported sample time")?;
+    let recorded = values.next().context("missing recorded sample time")?;
     ensure!(
         boot != fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim(),
         "guest has not restarted"
@@ -246,10 +269,7 @@ fn resumed(client: &Client) -> Result<()> {
         };
         Ok(live(&body) && timestamp(&body)? > previous)
     })?;
-    ensure!(
-        imported_time(&page(client)?)? == sample,
-        "reboot lost the first recorded sample"
-    );
+    verify_saved_samples(&page(client)?, imported, recorded)?;
     println!("Fresh reception resumed after reboot and minute history survived");
     Ok(())
 }
@@ -308,10 +328,15 @@ mod tests {
 
     #[test]
     fn the_saved_sample_uses_its_own_row_and_rejects_an_unrelated_humidity() -> Result<()> {
-        let html = r#"<time datetime="2026-01-01T00:03:00Z"></time><tr><td><time datetime="2026-01-01T00:02:00Z"></time></td><td>45％</td></tr><tr><td><time datetime="2026-01-01T00:01:00Z"></time></td><td>43％</td></tr>"#;
+        let html = r#"<time datetime="2026-01-01T00:03:00Z"></time><tbody><tr><td><time datetime="2026-01-01T00:02:00Z"></time></td><td>45％</td></tr><tr><td><time datetime="2026-01-01T00:01:00Z"></time></td><td>43％</td></tr></tbody>"#;
         assert_eq!(timestamp(html)?, "2026-01-01T00:03:00Z");
-        assert_eq!(imported_time(html)?, "2026-01-01T00:01:00Z");
-        assert!(imported_time(&html.replace("43％", "41％")).is_err());
+        let imported = "2026-01-01T00:01:00Z";
+        let recorded = "2026-01-01T00:02:00Z";
+        assert_eq!(sample_times(html, 43)?, [imported]);
+        verify_saved_samples(html, imported, recorded)?;
+        assert!(verify_saved_samples(&html.replace("45％", "44％"), imported, recorded).is_err());
+        assert!(verify_saved_samples(&html.replace("43％", "44％"), imported, recorded).is_err());
+        assert!(verify_saved_samples(html, imported, timestamp(html)?).is_err());
         assert!(configured_history("database = \"/data/../wrong.redb\"").is_err());
         Ok(())
     }
