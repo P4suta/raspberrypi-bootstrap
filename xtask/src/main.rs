@@ -112,6 +112,9 @@ fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
 fn main() -> Result<()> {
     let arguments: Vec<_> = env::args().skip(1).collect();
     match arguments.as_slice() {
+        [command, directory, address] if command == "humidity-prepare" => {
+            operations::humidity::register(Path::new(directory), address)
+        }
         [command] if command == "check" => check(Path::new(".")),
         [command] if command == "check-publication" => publication::check(Path::new(".")),
         [command] if command == "check-dependencies" => publication::dependencies(Path::new(".")),
@@ -134,7 +137,7 @@ fn main() -> Result<()> {
         [command] if command == "monitoring-check" => host::monitoring_check(),
         [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
-            println!("{USAGE}");
+            println!("{USAGE} | humidity-prepare DIRECTORY ADDRESS");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
