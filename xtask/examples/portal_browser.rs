@@ -261,7 +261,8 @@ fn check(directory: &Path, browser: &Browser) -> Result<()> {
         ensure!(!browser.monochrome()?, "missed style change: {rule}");
     }
     let enlarged = original.replace("</style>", ":root{font-size:200%} *{letter-spacing:.12em;word-spacing:.16em;line-height:1.5}</style>")
-        .replace(SERVICES[0].0, &"x".repeat(180));
+        .replace(SERVICES[0].0, &"x".repeat(180))
+        .replace("<h1>Pi services", "<h1>Serviceportal");
     fs::write(&variant, enlarged)?;
     browser.open(&variant)?;
     ensure!(browser.fits()?, "enlarged link overflows");
