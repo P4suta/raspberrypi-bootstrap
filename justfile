@@ -11,8 +11,8 @@ check:
 
 [private]
 check-source:
-    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
-    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml
+    mise exec taplo@0.10.0 -- taplo fmt --check mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo lint --schema '{{ mise_schema }}' mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml
     mise exec taplo@0.10.0 -- taplo lint --no-schema repository.toml deny.toml .gitleaks.toml
     mise exec uv@0.13.6 -- uvx --from check-jsonschema==0.39.0 check-jsonschema --schemafile 'https://coderabbit.ai/integrations/schema.v2.json' .coderabbit.yaml
     just check-cloud-init boot/tailscale-trixie-arm64.yaml
@@ -36,7 +36,7 @@ build-image generator config:
     {{ quote(generator) }} build -S {{ quote(justfile_directory() / "image") }} -B {{ quote(justfile_directory() / ".local/image-work") }} -c {{ quote(config) }}
 
 fmt:
-    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
+    mise exec taplo@0.10.0 -- taplo fmt mise.toml mise.armhf.toml mise.arm64.toml mise.apps.toml mise.sites.toml mise.monitoring.toml mise.humidity.toml mise.checks.toml verification/preflight/mise.toml repository.toml Cargo.toml xtask/Cargo.toml deny.toml .gitleaks.toml
     cargo fmt --all
 
 plan:
@@ -124,3 +124,13 @@ monitoring-apply backup:
 
 monitoring-check:
     /usr/local/bin/raspberrypi-maintenance monitoring-check
+
+humidity-plan:
+    MISE_ENV=arm64,humidity mise bootstrap --dry-run --only files
+
+humidity-apply:
+    MISE_ENV=arm64,humidity mise bootstrap --yes --only files
+    sudo systemctl reload dbus.service
+
+humidity-prepare directory address:
+    cargo run --locked -- humidity-prepare {{ quote(directory) }} {{ quote(address) }}

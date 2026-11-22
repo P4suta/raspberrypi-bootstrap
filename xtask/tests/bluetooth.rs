@@ -17,6 +17,7 @@ fn image_and_live_bootstrap_allow_bluetooth_and_keep_wifi_off() {
     assert!(!policy.lines().any(|s| s == "dtoverlay=disable-bt"));
     let manifest = source("mise.toml");
     assert!(manifest.contains("\"apt:bluez\""));
+    assert!(manifest.contains("\"apt:bluez-firmware\""));
     assert!(manifest.contains(
         "[bootstrap.services.bluetooth]\nstate = \"running\"\nenabled = true\nmasked = false"
     ));
@@ -32,6 +33,7 @@ fn image_and_live_bootstrap_allow_bluetooth_and_keep_wifi_off() {
             .any(|line| line.contains("mask iwd.service") && !line.contains("bluetooth.service"))
     );
     assert!(layer.contains("enable bluetooth.service"));
+    assert!(layer.lines().any(|line| line.trim() == "- bluez-firmware"));
     assert!(
         !layer
             .lines()
@@ -43,6 +45,19 @@ fn image_and_live_bootstrap_allow_bluetooth_and_keep_wifi_off() {
         )
         .contains("include radio-policy.txt")
     );
+}
+
+#[test]
+fn image_and_project_checks_include_the_humidity_profile() {
+    assert!(source("image/layer/tailscale-development.yaml").contains("/../mise.humidity.toml"));
+    let commands = source("justfile");
+    for line in commands
+        .lines()
+        .filter(|line| line.contains("mise.monitoring.toml"))
+    {
+        assert!(line.contains("mise.humidity.toml"));
+    }
+    assert!(commands.contains("humidity-plan:") && commands.contains("humidity-apply:"));
 }
 
 #[test]

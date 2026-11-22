@@ -37,6 +37,7 @@ mmdebstrap:
     - install -D -m 0644 "${IGconf_access_source}/mise-tailscale.sources" "$1/etc/apt/sources.list.d/mise-tailscale.sources"
   packages:
     - bluez
+    - bluez-firmware
     - build-essential
     - ca-certificates
     - curl
@@ -53,7 +54,7 @@ mmdebstrap:
       curl --fail --location --output "$target_home/.local/bin/mise" https://github.com/jdx/mise/releases/download/v2026.10.24/mise-v2026.10.24-linux-arm64
       printf '%s  %s\n' ae1151a87d70146119f68f7378001a12f09d2a38853087ed6139b7527a55f148 "$target_home/.local/bin/mise" | sha256sum --check -
       chmod 0755 "$target_home/.local/bin/mise"
-      install -m 0644 "${IGconf_access_source}/../mise.toml" "${IGconf_access_source}/../mise.arm64.toml" "${IGconf_access_source}/../mise.armhf.toml" "${IGconf_access_source}/../mise.apps.toml" "${IGconf_access_source}/../mise.sites.toml" "${IGconf_access_source}/../repository.toml" "${IGconf_access_source}/../justfile" "$target_home/projects/raspberrypi-bootstrap/"
+      install -m 0644 "${IGconf_access_source}/../mise.toml" "${IGconf_access_source}/../mise.arm64.toml" "${IGconf_access_source}/../mise.armhf.toml" "${IGconf_access_source}/../mise.apps.toml" "${IGconf_access_source}/../mise.sites.toml" "${IGconf_access_source}/../mise.monitoring.toml" "${IGconf_access_source}/../mise.humidity.toml" "${IGconf_access_source}/../repository.toml" "${IGconf_access_source}/../justfile" "$target_home/projects/raspberrypi-bootstrap/"
       cp -a "${IGconf_access_source}/../boot" "${IGconf_access_source}" "${IGconf_access_source}/../verification" "${IGconf_access_source}/../config" "${IGconf_access_source}/../apps" "$target_home/projects/raspberrypi-bootstrap/"
       chroot "$1" chown -R "${IGconf_device_user1}:${IGconf_device_user1}" "/home/${IGconf_device_user1}/.local" "/home/${IGconf_device_user1}/projects"
       uchroot "$1" 'set -eu; export PATH="$HOME/.local/bin:$PATH"; cd "$HOME/projects/raspberrypi-bootstrap"; MISE_ENV=arm64 mise trust; MISE_ENV=arm64 mise bootstrap --yes --only packages,tools'

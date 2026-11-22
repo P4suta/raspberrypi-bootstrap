@@ -6,6 +6,7 @@ just = "1.59.0"
 
 [bootstrap.packages]
 "apt:bluez" = "latest"
+"apt:bluez-firmware" = "latest"
 "apt:build-essential" = "latest"
 "apt:ca-certificates" = "latest"
 "apt:cloud-initramfs-growroot" = "latest"

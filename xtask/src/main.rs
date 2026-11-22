@@ -24,7 +24,7 @@ impl Drop for OperationLock {
     }
 }
 
-const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
+const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
