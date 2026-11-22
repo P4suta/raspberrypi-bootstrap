@@ -148,38 +148,25 @@ fn read_serve() -> Result<(Value, String)> {
     read_serve_at(SOCKET)
 }
 
+fn local_client(socket: &str) -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .unix_socket(PathBuf::from(socket))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?)
+}
+
 fn read_serve_at(socket: &str) -> Result<(Value, String)> {
-    let response = output(Command::new("/usr/bin/curl").args([
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "10",
-        "--noproxy",
-        "*",
-        "--unix-socket",
-        socket,
-        "--dump-header",
-        "-",
-        API,
-    ]))?;
-    let response = String::from_utf8(response)?;
-    let (headers, body) = response
-        .split_once("\r\n\r\n")
-        .context("invalid local API response")?;
-    let tag = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("etag")
-                .then(|| value.trim().to_owned())
-        })
-        .context("Serve API omitted its concurrency tag")?;
-    ensure!(
-        !tag.is_empty() && !tag.chars().any(char::is_control),
-        "invalid concurrency tag"
-    );
-    Ok((serde_json::from_str(body)?, tag))
+    let response = local_client(socket)?.get(API).send()?.error_for_status()?;
+    let tag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .context("Serve API omitted its concurrency tag")?
+        .to_str()?
+        .to_owned();
+    ensure!(!tag.is_empty(), "empty Serve concurrency tag");
+    Ok((response.json()?, tag))
 }
 
 fn write_serve(value: &Value, tag: &str) -> Result<()> {
@@ -187,40 +174,13 @@ fn write_serve(value: &Value, tag: &str) -> Result<()> {
 }
 
 fn write_serve_at(socket: &str, value: &Value, tag: &str) -> Result<()> {
-    let mut child = Command::new("/usr/bin/curl")
-        .args([
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--max-time",
-            "10",
-            "--noproxy",
-            "*",
-            "--unix-socket",
-            socket,
-            "--request",
-            "POST",
-            "--header",
-            &format!("If-Match: {tag}"),
-            "--header",
-            "Content-Type: application/json",
-            "--data-binary",
-            "@-",
-            API,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .context("local API input is unavailable")?
-        .write_all(&serde_json::to_vec(value)?)?;
-    ensure!(
-        child.wait()?.success(),
-        "Serve update failed or its concurrency tag changed"
-    );
+    let response = local_client(socket)?
+        .post(API)
+        .header(reqwest::header::IF_MATCH, tag)
+        .json(value)
+        .send()?
+        .error_for_status()?;
+    ensure!(response.status().is_success(), "unexpected Serve response");
     Ok(())
 }
 
@@ -682,10 +642,17 @@ mod tests {
     };
 
     fn exchange(response: &str, client: impl FnOnce(&str) -> Result<()>) -> Result<String> {
+        struct SocketPath(std::path::PathBuf);
+        impl Drop for SocketPath {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
         let mut nonce = [0_u8; 8];
         getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("socket identity: {error}"))?;
         let socket = std::env::temp_dir().join(format!("pi-api-{:x?}", nonce));
         let listener = UnixListener::bind(&socket)?;
+        let _cleanup = SocketPath(socket.clone());
         listener.set_nonblocking(true)?;
         let response = response.to_owned();
         let server = thread::spawn(move || -> Result<String> {
@@ -735,7 +702,6 @@ mod tests {
         let request = server
             .join()
             .map_err(|_| anyhow::anyhow!("local API fixture panicked"))?;
-        fs::remove_file(socket)?;
         let request = request.context("local API fixture exchange failed")?;
         result?;
         Ok(request)
@@ -756,11 +722,21 @@ mod tests {
         let request = exchange(
             "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 0\r\n\r\n",
             |socket| {
-                assert!(write_serve_at(socket, &json!({"TCP":{}}), "stale-tag").is_err());
+                let error = write_serve_at(socket, &json!({"TCP":{}}), "stale-tag").unwrap_err();
+                assert_eq!(
+                    error
+                        .downcast_ref::<reqwest::Error>()
+                        .and_then(reqwest::Error::status),
+                    Some(reqwest::StatusCode::PRECONDITION_FAILED)
+                );
                 Ok(())
             },
         )?;
-        assert!(request.contains("If-Match: stale-tag\r\n"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("if-match: stale-tag\r\n")
+        );
         assert!(request.ends_with("{\"TCP\":{}}"));
         exchange("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}", |socket| {
             assert!(read_serve_at(socket).is_err());
