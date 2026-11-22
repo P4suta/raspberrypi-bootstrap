@@ -21,8 +21,8 @@ group = "apps"
 groups = []
 exclusive_groups = true
 home = "/var/lib/apps"
-shell = "/usr/sbin/nologin"
-comment = "Rootless app services"
+shell = "/bin/sh"
+comment = "Unprivileged app operations"
 create_home = true
 
 [bootstrap.directories."/var/lib/apps"]

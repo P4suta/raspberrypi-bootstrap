@@ -62,9 +62,15 @@ owner = "apps"
 group = "apps"
 mode = "0644"
 
-[bootstrap.files."/etc/systemd/system/monitoring-agent.service"]
+[bootstrap.directories."/var/lib/beszel-agent"]
+os = "linux"
+owner = "apps"
+group = "apps"
+mode = "0700"
+
+[bootstrap.files."/var/lib/apps/.config/systemd/user/monitoring-agent.service"]
 os = "linux"
 source = "apps/monitoring/agent.service"
-owner = "root"
-group = "root"
+owner = "apps"
+group = "apps"
 mode = "0644"
