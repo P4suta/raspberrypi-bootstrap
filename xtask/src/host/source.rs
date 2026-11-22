@@ -145,6 +145,8 @@ fn contents(root: &Path, directory: &Path, paths: &mut BTreeSet<PathBuf>) -> Res
 }
 
 pub(crate) fn verify(root: &Path) -> Result<()> {
+    let mut actual_paths = BTreeSet::new();
+    contents(root, root, &mut actual_paths)?;
     let manifest = fs::read_to_string(root.join(MANIFEST))?;
     let identity = fs::read_to_string(root.join(IDENTITY))?;
     ensure!(
@@ -152,8 +154,6 @@ pub(crate) fn verify(root: &Path) -> Result<()> {
         "source manifest identity differs"
     );
     let files = decode(&manifest)?;
-    let mut actual_paths = BTreeSet::new();
-    contents(root, root, &mut actual_paths)?;
     ensure!(
         actual_paths == files.keys().cloned().collect(),
         "source files differ from the declared file set"
@@ -200,6 +200,12 @@ mod tests {
             fs::write(root.join("source.sha256"), &manifest)?;
             fs::write(root.join("source.id"), digest(manifest.as_bytes())?)?;
             verify(&root)?;
+            let identity = fs::read(root.join("source.id"))?;
+            fs::remove_file(root.join("source.id"))?;
+            std::os::unix::fs::symlink(root.join("absent"), root.join("source.id"))?;
+            assert!(verify(&root).unwrap_err().to_string().contains("links"));
+            fs::remove_file(root.join("source.id"))?;
+            fs::write(root.join("source.id"), identity)?;
             fs::write(root.join("unexpected.toml"), b"[settings]\n")?;
             assert!(verify(&root).is_err());
             fs::remove_file(root.join("unexpected.toml"))?;
