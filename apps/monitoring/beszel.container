@@ -5,8 +5,8 @@ After=network-online.target
 ConditionPathExists=%h/.config/monitoring/hub.env
 
 [Container]
-# renovate: version=0.21.0
-Image=docker.io/henrygd/beszel@sha256:6b39a8b64f9b15d00a25e7683e31a93c46161182a54f62713525107064e10599
+# renovate: version=0.21.2
+Image=docker.io/henrygd/beszel@sha256:b0be90bd4aee2993fde763032a5098ce4386fba43cfe5031ec017b8d9e8c97a2
 ContainerName=monitoring-beszel
 Network=monitoring.network
 PublishPort=127.0.0.1:8090:8090
