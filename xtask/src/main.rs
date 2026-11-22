@@ -25,6 +25,10 @@ impl Drop for OperationLock {
 }
 
 const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
+const SHA256_HEX_LENGTH: usize = 64;
+const PUBLISHED_PORT_FIELDS: usize = 3;
+const LOOPBACK_HOST: &str = "127.0.0.1";
+const NTFY_AUTH_DATABASE: &str = "/var/lib/ntfy/auth.db";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -56,7 +60,7 @@ fn validate_container(document: &str) -> Result<()> {
         .split_once("@sha256:")
         .context("image digest is required")?;
     ensure!(
-        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        digest.len() == SHA256_HEX_LENGTH && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "invalid image digest"
     );
     let ports = values(document, "PublishPort")?;
@@ -64,7 +68,7 @@ fn validate_container(document: &str) -> Result<()> {
     for port in ports {
         let parts: Vec<_> = port.split(':').collect();
         ensure!(
-            parts.len() == 3 && parts[0] == "127.0.0.1",
+            parts.len() == PUBLISHED_PORT_FIELDS && parts[0] == LOOPBACK_HOST,
             "listener must bind only to loopback"
         );
         for part in &parts[1..] {
@@ -95,7 +99,7 @@ fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
     validate_container(hub).context("hub")?;
     validate_container(ntfy).context("ntfy")?;
     ensure!(
-        server["auth-file"] == "/var/lib/ntfy/auth.db",
+        server["auth-file"] == NTFY_AUTH_DATABASE,
         "persistent authentication backend is required"
     );
     ensure!(
@@ -177,6 +181,9 @@ fn check(root: &Path) -> Result<()> {
         host::MemoryBootLine::parse(&memory)?.0 == memory,
         "image kernel policy must enable memory accounting"
     );
+    validate_container(&fs::read_to_string(
+        root.join("apps/quadlet/excalidraw.container"),
+    )?)?;
     let path = root.join("apps/monitoring");
     validate_documents(
         &fs::read_to_string(path.join("beszel.container"))?,
