@@ -25,10 +25,6 @@ impl Drop for OperationLock {
 }
 
 const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
-const SHA256_HEX_LENGTH: usize = 64;
-const PUBLISHED_PORT_FIELDS: usize = 3;
-const LOOPBACK_HOST: &str = "127.0.0.1";
-const NTFY_AUTH_DATABASE: &str = "/var/lib/ntfy/auth.db";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -54,6 +50,9 @@ fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
 }
 
 fn validate_container(document: &str) -> Result<()> {
+    const SHA256_HEX_LENGTH: usize = 64;
+    const PUBLISHED_PORT_FIELDS: usize = 3;
+    const LOOPBACK_HOST: &str = "127.0.0.1";
     let images = values(document, "Image")?;
     ensure!(images.len() == 1, "one pinned image is required");
     let (_, digest) = images[0]
@@ -96,6 +95,7 @@ fn validate_container(document: &str) -> Result<()> {
 }
 
 fn validate_documents(hub: &str, ntfy: &str, server: &Value) -> Result<()> {
+    const NTFY_AUTH_DATABASE: &str = "/var/lib/ntfy/auth.db";
     validate_container(hub).context("hub")?;
     validate_container(ntfy).context("ntfy")?;
     ensure!(
