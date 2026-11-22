@@ -60,6 +60,11 @@ fn registration_is_repeatable_and_grants_a_separate_write_only_topic() {
             .unwrap()
             .contains("AA:BB:CC:DD:EE:FF")
     );
+    assert!(
+        fs::read_to_string(runtime.join("monitor.toml"))
+            .unwrap()
+            .contains("database = \"/data/readings.redb\"")
+    );
     assert!(run("AA:BB:CC:DD:EE:FF").status.success());
     assert_eq!(fs::read_to_string(&env_file).unwrap(), prepared);
     fs::write(
