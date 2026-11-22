@@ -5,6 +5,7 @@ use std::{env, fs, path::Path};
 mod host;
 mod operations;
 mod publication;
+mod routing;
 
 pub(crate) struct OperationLock(fs::File);
 
@@ -115,6 +116,9 @@ fn main() -> Result<()> {
         [command, directory, address] if command == "humidity-prepare" => {
             operations::humidity::register(Path::new(directory), address)
         }
+        [command, site, networks, destination] if command == "routing-config" => {
+            routing::write(site, networks, Path::new(destination))
+        }
         [command] if command == "check" => check(Path::new(".")),
         [command] if command == "check-publication" => publication::check(Path::new(".")),
         [command] if command == "check-dependencies" => publication::dependencies(Path::new(".")),
@@ -138,6 +142,7 @@ fn main() -> Result<()> {
         [command, service] if command == "apps-restart" => host::apps_restart(service),
         [command] if command == "--help" || command == "-h" => {
             println!("{USAGE} | humidity-preflight IMAGE WORKSPACE");
+            println!("raspberrypi-maintenance routing-config SITE NETWORKS DESTINATION");
             Ok(())
         }
         [command, mise, agent] if command == "preflight-init" => {
