@@ -37,6 +37,7 @@ check-source:
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets -- -D warnings
     cargo test --locked
+    just check-portal
     cargo run --locked -- check
     actionlint
     cargo run --locked -- check-publication
@@ -47,6 +48,11 @@ check-cloud-init config:
 
 check-image-source:
     mise exec yq@4.54.3 -- yq -r '.write_files[0].content | trim' boot/tailscale-trixie-arm64.yaml | cmp image/mise-tailscale.sources -
+
+check-portal:
+    cargo run --quiet --locked -- portal-render verification/examples/host.json .local/check-portal/index.html
+    mise exec yq@4.54.3 -- yq -o=json 'del(.routes[].label)' verification/examples/host.json | cargo run --quiet --locked -- portal-render /dev/stdin .local/check-portal/empty.html
+    cargo run --quiet --locked --example portal_browser -- .local/check-portal
 
 build-image generator config:
     install -d {{ quote(justfile_directory() / ".local/image-work") }}
@@ -97,6 +103,9 @@ host-restore backup:
 
 host-recover:
     sudo /usr/local/bin/raspberrypi-maintenance host-recover
+
+portal-preview config="verification/examples/host.json":
+    @cargo run --quiet --locked -- portal-render {{ quote(config) }} .local/service-portal.html
 
 source-stage destination:
     MISE_ENV=checks mise x -- cargo run --locked -- source-stage . {{ quote(destination) }}

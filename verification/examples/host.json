@@ -7,8 +7,9 @@
     "peer": "172.30.254.250"
   },
   "routes": [
-    { "port": 8443, "target": "http://127.0.0.1:8090" },
-    { "port": 10443, "target": "http://127.0.0.1:8081" },
+    { "port": 12443, "target": "http://127.0.0.1:8092", "label": "Camera storage humidity" },
+    { "port": 8443, "target": "http://127.0.0.1:8090", "label": "System metrics" },
+    { "port": 10443, "target": "http://127.0.0.1:8081", "label": "Notifications" },
     {
       "port": 11443,
       "target": "http://172.30.254.250:80",

@@ -5,10 +5,12 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, net::Ipv4Addr};
 
 mod native;
+mod portal;
 mod source;
 pub(crate) use native::{agent_migrate, agent_restore};
 pub(crate) use native::{apply, bootline, check, plan, recover, restore};
 pub(crate) use native::{apps_check, apps_restart, monitoring_check};
+pub(crate) use portal::render_file as render_portal;
 pub(crate) use source::{stage, verify};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +75,8 @@ pub(crate) struct Network {
 pub(crate) struct Route {
     pub port: u16,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(default)]
     pub alternatives: Vec<String>,
 }
@@ -222,6 +226,15 @@ impl Config {
         );
         let mut ports = BTreeSet::new();
         for route in &self.routes {
+            if let Some(label) = &route.label {
+                ensure!(
+                    !label.trim().is_empty()
+                        && !label
+                            .chars()
+                            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')),
+                    "a portal label must be nonblank and fit on one line"
+                );
+            }
             ensure!(
                 route.port > 0 && ports.insert(route.port),
                 "duplicate or invalid route port"

@@ -25,7 +25,7 @@ impl Drop for OperationLock {
     }
 }
 
-const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
+const USAGE: &str = "raspberrypi-maintenance check | check-publication | check-dependencies | preflight | preflight-init MISE AGENT | humidity-prepare DIRECTORY ADDRESS | cached CONFIG ID | prepare|retire-nas|reader-password|reader-password-resume|reader-password-check|configure|status|notifications|verify CONFIG | host-plan|host-check CONFIG | host-apply CONFIG BACKUP | host-restore|agent-migrate|agent-restore BACKUP | host-recover | portal-render CONFIG OUTPUT | memory-bootline PATH | source-stage SOURCE OUTPUT | source-verify SOURCE | apps-check | monitoring-check | apps-restart metrics|notifications|agent|telephone";
 
 fn values<'a>(document: &'a str, key: &str) -> Result<Vec<&'a str>> {
     let mut section = "";
@@ -127,6 +127,9 @@ fn main() -> Result<()> {
         [command] if command == "check-publication" => publication::check(Path::new(".")),
         [command] if command == "check-dependencies" => publication::dependencies(Path::new(".")),
         [command] if command == "preflight" => operations::local_preflight(),
+        [command, config, output] if command == "portal-render" => {
+            host::render_portal(Path::new(config), Path::new(output))
+        }
         [command, config] if command == "host-plan" => host::plan(Path::new(config)),
         [command, config] if command == "host-check" => host::check(Path::new(config)),
         [command, config, backup] if command == "host-apply" => {

@@ -1,4 +1,4 @@
-use super::{AppOperation, AppService, Config, MemoryBootLine, restart_app};
+use super::{AppOperation, AppService, Config, MemoryBootLine, portal, restart_app};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use std::{
@@ -84,7 +84,7 @@ fn write_new(path: &Path, content: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 
-fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
+pub(super) fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         ensure!(
             metadata.is_file() && !metadata.file_type().is_symlink(),
@@ -104,7 +104,7 @@ fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
-        fs::File::open(parent)?.sync_all()?;
+        sync_parent(path)?;
         Ok(())
     };
     let result = operation();
@@ -117,11 +117,15 @@ fn replace(path: &Path, content: &[u8], mode: u32) -> Result<()> {
 }
 
 fn files(config: &Config) -> Result<Vec<FileChange>> {
-    files_with_boot(config, &fs::read_to_string(BOOT)?)
+    files_with_boot(
+        config,
+        &fs::read_to_string(BOOT)?,
+        Path::new(portal::FILE).try_exists()?,
+    )
 }
 
-fn files_with_boot(config: &Config, boot: &str) -> Result<Vec<FileChange>> {
-    Ok(vec![
+fn files_with_boot(config: &Config, boot: &str, existing_portal: bool) -> Result<Vec<FileChange>> {
+    let mut files = vec![
         FileChange {
             name: "management-network",
             path: NETWORK.into(),
@@ -144,7 +148,16 @@ fn files_with_boot(config: &Config, boot: &str) -> Result<Vec<FileChange>> {
             content: serde_json::to_vec_pretty(config)?,
             mode: 0o600,
         },
-    ])
+    ];
+    if existing_portal || config.routes.iter().any(|route| route.label.is_some()) {
+        files.push(FileChange {
+            name: portal::BACKUP_NAME,
+            path: portal::FILE.into(),
+            content: portal::html(config).into_bytes(),
+            mode: 0o600,
+        });
+    }
+    Ok(files)
 }
 
 fn read_serve() -> Result<(Value, String)> {
@@ -436,7 +449,10 @@ fn restore_locked(backup: &Path) -> Result<()> {
     let before: Value = serde_json::from_slice(&fs::read(backup.join("before-serve.json"))?)?;
     let applied: Value = serde_json::from_slice(&fs::read(backup.join("applied-serve.json"))?)?;
     let boot = fs::read_to_string(backup.join("kernel-command-line"))?;
-    restore_files(backup, &files_with_boot(&config, &boot)?)?;
+    let saved_portal = backup
+        .join(format!("{}.applied", portal::BACKUP_NAME))
+        .try_exists()?;
+    restore_files(backup, &files_with_boot(&config, &boot, saved_portal)?)?;
     output(Command::new("/usr/bin/networkctl").arg("reload"))?;
     if before != applied && !backup.join("serve-unchanged").try_exists()? {
         let (current, tag) = read_serve()
@@ -813,6 +829,42 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn host_updates_track_the_portal_after_the_last_label_is_removed() -> Result<()> {
+        let mut config: super::Config =
+            serde_json::from_str(include_str!("../../../verification/examples/host.json"))?;
+        let portal = |config: &super::Config, existing| -> Result<_> {
+            Ok(super::files_with_boot(config, "rootwait", existing)?
+                .into_iter()
+                .find(|file| file.path == std::path::Path::new(super::portal::FILE)))
+        };
+        let enabled = portal(&config, false)?.context("missing portal in host update")?;
+        assert_eq!(enabled.mode, 0o600);
+        assert_eq!(enabled.content, super::portal::html(&config).as_bytes());
+        let routes = config.serve_config(&json!({}))?;
+        for route in &mut config.routes {
+            route.label = None;
+        }
+        assert_eq!(config.serve_config(&json!({}))?, routes);
+        assert!(portal(&config, false)?.is_none());
+        let mut cleared = portal(&config, true)?.context("missing update to existing portal")?;
+        assert!(!std::str::from_utf8(&cleared.content)?.contains("href="));
+
+        let backup = std::env::temp_dir().join(format!("pi-portal-restore-{}", std::process::id()));
+        fs::create_dir(&backup)?;
+        cleared.path = backup.join("page.html");
+        fs::write(backup.join(cleared.name), &enabled.content)?;
+        fs::write(
+            backup.join(format!("{}.mode", cleared.name)),
+            enabled.mode.to_string(),
+        )?;
+        super::replace(&cleared.path, &cleared.content, cleared.mode)?;
+        super::restore_files(&backup, std::slice::from_ref(&cleared))?;
+        assert_eq!(fs::read(&cleared.path)?, enabled.content);
+        fs::remove_dir_all(backup)?;
+        Ok(())
+    }
 
     fn exchange(response: &str, client: impl FnOnce(&str) -> Result<()>) -> Result<String> {
         struct SocketPath(std::path::PathBuf);

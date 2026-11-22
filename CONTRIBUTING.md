@@ -7,6 +7,9 @@ The monitoring rehearsal uses an isolated ARM64 Debian 13 OrbStack machine on ma
 ## Check a checkout
 
 Review the tool declarations before trusting the checkout.
+The portal check requires Google Chrome or Chromium and a matching ChromeDriver.
+Follow the [ChromeDriver version selection guide](https://developer.chrome.com/docs/chromedriver/downloads/version-selection) to match the installed browser.
+Put `chromedriver` on `PATH` or set `CHROMEDRIVER` to the driver's executable path.
 Install the project tools and run the authoritative check.
 
 ```sh
