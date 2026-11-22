@@ -1,0 +1,27 @@
+[Unit]
+Description=Camera storage humidity
+After=monitoring-ntfy.service
+
+[Container]
+Image=localhost/humidity-monitor:installed
+Pull=never
+ContainerName=humidity-monitor
+UserNS=keep-id
+Network=monitoring.network
+PublishPort=127.0.0.1:8092:8080
+Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+Volume=%h/.config/humidity-monitor:/config:ro
+Volume=%h/humidity-monitor:/data
+Secret=humidity-ntfy-token,type=mount,target=ntfy-token,uid=%U,mode=0400
+Exec=serve /config/monitor.toml
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+
+[Service]
+Restart=on-failure
+RestartSec=5
+MemoryMax=192M
+
+[Install]
+WantedBy=default.target
