@@ -64,7 +64,27 @@ Open the private HTTPS address on a phone connected to the tailnet.
 Stop `humidity-monitor.service` as `apps` before replacing the receiver image.
 Keep the data volume and make room for both database files.
 On startup the new receiver imports `/data/readings.sqlite` into `/data/readings.redb` and retains the original file.
+
+Keep the running receiver and one previous image under fixed tags.
+The Pi's Podman storage reports `Supports shifting: false`, so it keeps an ID-mapped copy of each image that ran under `UserNS=keep-id`.
+Every retained image then costs its full size again.
+Save the candidate archive from `localhost/humidity-monitor:installed`, as the rehearsal does, because `podman load` keeps the archive's tag.
+Tag the running container's image as previous before stopping the service, so a retry can't move the tag to a failed candidate.
+If the container is absent because a candidate failed to start, roll back before upgrading again.
+
+```sh
+podman tag "$(podman container inspect --format '{{.Image}}' humidity-monitor)" localhost/humidity-monitor:previous
+systemctl --user stop humidity-monitor.service
+podman load --input /private/path/receiver.tar
+systemctl --user start humidity-monitor.service
+```
+
 Open the dashboard and check a fresh reception and a measurement from before the upgrade.
+Then review the images that lost their last tag with `podman images --filter dangling=true` and remove them with `podman image prune --force`.
+The prune removes every untagged image in the `apps` store, including other apps' images.
+Roll back only to a receiver with the same storage format, because the receiver refuses a database whose format differs.
+To roll back, stop the service, run `podman tag localhost/humidity-monitor:previous localhost/humidity-monitor:installed`, and start the service.
+Avoid other tags on receiver images, so pruning removes every earlier image.
 
 ## Rehearse the deployment
 

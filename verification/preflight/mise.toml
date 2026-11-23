@@ -4,7 +4,10 @@ min_version = "2026.10.24"
 CARGO_INCREMENTAL = "0"
 
 [tools]
-rust = { version = "1.100.0", components = ["clippy", "rustfmt"] }
+rust = { version = "1.100.0", profile = "minimal", components = [
+  "clippy",
+  "rustfmt",
+] }
 just = "1.59.0"
 
 [bootstrap.packages]
