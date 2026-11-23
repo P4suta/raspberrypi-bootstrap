@@ -67,6 +67,7 @@ plan:
 
 apply:
     mise bootstrap --yes --update --only packages,files,services,tools
+    mise prune --yes --tools
 
 verify-host:
     mise bootstrap status --missing

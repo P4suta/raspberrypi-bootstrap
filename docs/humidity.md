@@ -66,6 +66,23 @@ Keep the data volume and make room for both database files.
 On startup the new receiver imports `/data/readings.sqlite` into `/data/readings.redb` and retains the original file.
 Open the dashboard and check a fresh reception and a measurement from before the upgrade.
 
+Keep the running receiver and one previous image under fixed tags.
+The Pi's Podman storage reports `Supports shifting: false`, so it keeps an ID-mapped copy of each image that ran under `UserNS=keep-id`.
+Every retained image then costs its full size again.
+Move the previous tag to the running image before loading the candidate as `localhost/humidity-monitor:installed`.
+
+```sh
+systemctl --user stop humidity-monitor.service
+podman tag localhost/humidity-monitor:installed localhost/humidity-monitor:previous
+podman load --input /private/path/receiver.tar
+systemctl --user start humidity-monitor.service
+```
+
+After the dashboard check, remove the image that lost its last tag with `podman image prune --force`.
+Roll back only to a receiver with the same storage format, because the receiver refuses a database whose format differs.
+To roll back, stop the service, run `podman tag localhost/humidity-monitor:previous localhost/humidity-monitor:installed`, and start the service.
+Avoid other tags on receiver images, so pruning removes every earlier image.
+
 ## Rehearse the deployment
 
 Complete the ARM64 monitoring rehearsal to prepare the isolated guest and its test subscriber.

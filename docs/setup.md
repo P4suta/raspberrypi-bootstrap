@@ -237,4 +237,6 @@ Pass the destination as a command argument instead of adding a private hostname 
 The first domyjob connection builds its matching remote executable using the embedded source and tool configuration.
 Install the embedded source's exact Rust version first and temporarily turn off automatic mise tool installation for that build to avoid installing unrelated development tools.
 Restore the previous automatic installation policy after the build and verify a remote job before starting project work.
+Then run `mise prune --yes --tools` from the bootstrap checkout to remove toolchains that no tracked configuration selects.
+Each Rust toolchain occupies more than 400 MiB on the Pi's root filesystem even with the minimal profile.
 The Raspberry Pi bootstrap configuration itself declares only Rust and just as managed development tools.
